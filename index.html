@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3DSideHustle — Keychain Designer</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='5' cy='8' r='4' fill='none' stroke='%23a855f7' stroke-width='2.5'/><rect x='8' y='6' width='7' height='4' rx='2' fill='%23a855f7'/></svg>" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1><span class="logo">🔑</span> 3DSideHustle <span class="accent">Keychain Designer</span></h1>
+      <div class="topbar-actions">
+        <button type="button" class="btn" id="reset-btn">↺ Reset</button>
+        <button type="button" class="btn btn-primary" id="export-btn" disabled>⬇ Export STL</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <div class="viewer-wrap">
+        <div id="viewer-box"></div>
+        <div id="viewer-hint">Loading font…</div>
+        <button type="button" class="btn btn-small" id="fit-btn" title="Frame the model">⤢ fit view</button>
+      </div>
+
+      <aside class="sidebar">
+        <section class="card">
+          <h2><span class="chip chip-blue">🅰</span> Font &amp; Text</h2>
+
+          <label class="field-label">Upload Font</label>
+          <button type="button" class="btn btn-wide btn-accent" id="font-btn">📁 Choose Font Files</button>
+          <input type="file" id="font-files" accept=".ttf,.otf,.woff" multiple hidden />
+          <select id="font-select" class="select"></select>
+
+          <label class="field-label" id="folder-label">Save Folder</label>
+          <button type="button" class="btn btn-wide" id="folder-btn">📁 Choose Save Folder</button>
+          <p class="hint" id="folder-name">Not set — exports download normally</p>
+
+          <label class="field-label" for="text-input">Keychain Text</label>
+          <input type="text" id="text-input" maxlength="15" placeholder="Enter name (max 15 chars)" value="NAME" />
+          <p class="hint" id="char-count">2/15 characters</p>
+        </section>
+
+        <section class="card">
+          <h2><span class="chip chip-yellow">❖</span> Artwork (SVG)</h2>
+
+          <button type="button" class="btn btn-wide" id="art-btn">📁 Choose SVG</button>
+          <input type="file" id="art-file" accept=".svg,image/svg+xml" hidden />
+          <div class="art-row">
+            <p class="hint" id="art-name">No artwork loaded</p>
+            <button type="button" class="art-x" id="art-remove" style="display:none" title="Remove artwork">×</button>
+          </div>
+
+          <div class="slider-field">
+            <label for="art-size">Artwork Size <span class="val" id="art-size-val"></span></label>
+            <input type="range" id="art-size" min="5" max="40" step="0.5" value="20" />
+          </div>
+
+          <label class="field-label">Color</label>
+          <div class="color-row">
+            <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
+          </div>
+          <p class="hint">Extruded to the text height on the base. Drag it in the preview — the base grows to hold it.</p>
+        </section>
+
+        <section class="card">
+          <h2><span class="chip chip-pink">🎨</span> Appearance</h2>
+
+          <label class="field-label">Colors</label>
+          <div class="color-row">
+            <label class="color-box"><input type="color" id="base-color" value="#7c3aed" /><span>Base</span></label>
+            <label class="color-box"><input type="color" id="text-color" value="#ffffff" /><span>Text</span></label>
+          </div>
+
+          <div class="slider-field">
+            <label for="size">Text Size <span class="val" id="size-val"></span></label>
+            <input type="range" id="size" min="8" max="40" step="0.5" value="20" />
+          </div>
+          <div class="slider-field">
+            <label for="border">Border Width <span class="val" id="border-val"></span></label>
+            <input type="range" id="border" min="0.5" max="10" step="0.1" value="3" />
+          </div>
+          <div class="slider-field">
+            <label for="letter-spacing">Letter Spacing <span class="val" id="letter-spacing-val"></span></label>
+            <input type="range" id="letter-spacing" min="-2" max="5" step="0.1" value="0" />
+          </div>
+          <div class="slider-field">
+            <label for="word-gap">Word Gap <span class="val" id="word-gap-val"></span></label>
+            <input type="range" id="word-gap" min="0.5" max="3" step="0.1" value="1" />
+          </div>
+          <div class="slider-field">
+            <label for="hole-fill">Hole Fill Threshold <span class="val" id="hole-fill-val"></span></label>
+            <input type="range" id="hole-fill" min="0" max="20" step="0.5" value="2" />
+          </div>
+        </section>
+
+        <section class="card">
+          <h2><span class="chip chip-red">◎</span> Keyring Hole</h2>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="ring-enabled" checked />
+            <span>Keyring <em class="hint-inline">(off = plain nameplate)</em></span>
+          </label>
+
+          <div id="ring-controls">
+            <div class="slider-field">
+              <label for="hole-size">Hole Size <span class="val" id="hole-size-val"></span></label>
+              <input type="range" id="hole-size" min="2" max="12" step="0.5" value="5" />
+            </div>
+            <div class="slider-field">
+              <label for="ring-thick">Ring Thickness <span class="val" id="ring-thick-val"></span></label>
+              <input type="range" id="ring-thick" min="1" max="8" step="0.5" value="3" />
+            </div>
+            <label class="field-label">Position</label>
+            <p class="hint">Drag the ring in the preview to position it</p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2><span class="chip chip-green">⬆</span> Heights</h2>
+
+          <div class="slider-field">
+            <label for="base-h">Base Height <span class="val" id="base-h-val"></span></label>
+            <input type="range" id="base-h" min="0.4" max="10" step="0.2" value="3" />
+          </div>
+          <div class="slider-field">
+            <label for="text-h">Text Height (above base) <span class="val" id="text-h-val"></span></label>
+            <input type="range" id="text-h" min="0" max="10" step="0.2" value="2" />
+          </div>
+        </section>
+
+        <section class="card">
+          <h2><span class="chip chip-purple">⬇</span> Export</h2>
+
+          <div class="size-row"><span>Model size</span><span id="size-readout" class="mono accent2">—</span></div>
+          <div class="size-row"><span>Triangles</span><span id="tri-readout" class="mono accent2">—</span></div>
+
+          <button type="button" class="btn btn-wide btn-accent" id="export-combined" disabled>⬇ Export STL</button>
+          <button type="button" class="btn btn-wide" id="export-separate" disabled>⬇ Base + text as separate STLs</button>
+          <p class="hint">Separate STLs let you print base, text and artwork in different colors (filament swap or multi-body slicing). Color here is preview-only — STL has no color.</p>
+          <p class="hint" id="export-note"></p>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="/fable_output/Main.js"></script>
+  </body>
+</html>
