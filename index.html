@@ -42,25 +42,26 @@
         </section>
 
         <section class="card">
-          <h2><span class="chip chip-yellow">❖</span> Artwork (SVG)</h2>
+          <h2><span class="chip chip-yellow">❖</span> Artwork Bank (SVG)</h2>
 
-          <button type="button" class="btn btn-wide" id="art-btn">📁 Choose SVG</button>
-          <input type="file" id="art-file" accept=".svg,image/svg+xml" hidden />
-          <div class="art-row">
-            <p class="hint" id="art-name">No artwork loaded</p>
-            <button type="button" class="art-x" id="art-remove" style="display:none" title="Remove artwork">×</button>
-          </div>
+          <button type="button" class="btn btn-wide" id="art-btn">📁 Upload SVGs</button>
+          <input type="file" id="art-file" accept=".svg,image/svg+xml" multiple hidden />
+          <div id="art-bank" class="bank-grid"></div>
+          <p class="hint" id="bank-empty">Your bank is empty — upload SVGs to collect them here. They stay saved in this browser.</p>
+          <p class="hint">Click an SVG in the bank to add it to the keychain (as many as you like). Each is extruded to the text height — drag it in the preview, the base grows to hold it.</p>
 
-          <div class="slider-field">
-            <label for="art-size">Artwork Size <span class="val" id="art-size-val"></span></label>
-            <input type="range" id="art-size" min="5" max="40" step="0.5" value="20" />
+          <div id="art-placed-wrap" style="display:none">
+            <label class="field-label">On this keychain</label>
+            <ul id="art-list"></ul>
+            <div class="slider-field">
+              <label for="art-size">Artwork Size <span class="val" id="art-size-val"></span></label>
+              <input type="range" id="art-size" min="5" max="40" step="0.5" value="15" />
+            </div>
+            <label class="field-label">Color</label>
+            <div class="color-row">
+              <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
+            </div>
           </div>
-
-          <label class="field-label">Color</label>
-          <div class="color-row">
-            <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
-          </div>
-          <p class="hint">Extruded to the text height on the base. Drag it in the preview — the base grows to hold it.</p>
         </section>
 
         <section class="card">

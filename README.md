@@ -5,11 +5,13 @@ at independent heights, keyring hole you can drag into position, and binary
 STL export — combined, or base/text/artwork as separate files for multi-color
 prints.
 
-**SVG artwork**: upload any SVG (heart, paw, logo …) and it is flattened,
-auto-extruded to the same height as the text, given its own preview color,
-and made draggable in the 3D view just like the keyring — the base blob grows
-to hold it wherever you park it. The size slider scales it (aspect locked);
-the separate export adds a third `{name}-art.stl` for a third print color.
+**SVG artwork bank**: upload SVGs (multiple at once — hearts, paws, logos …)
+into a bank of thumbnails that persists in the browser (localStorage). Click
+a bank item to place it on the keychain — as many instances as you like, each
+with its own size, color and draggable position. Every artwork is flattened
+with the shared engine, auto-extruded to the text height, and the base blob
+grows to hold it wherever it is parked. The separate export adds one
+`{name}-artN.stl` per placed artwork for multi-color prints.
 
 Built on the SVG-extrude engine from the companion
 [filipsaldy](https://github.com/notschizo91/filipsaldy) tool (same theme, same

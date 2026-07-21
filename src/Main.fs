@@ -56,17 +56,39 @@ let mutable private ringPos: Pt option = None
 let mutable private ringCenterActual = { X = 0.0; Y = 0.0 }
 let mutable private folderHandle: obj = null
 
-// Imported SVG artwork, normalized: centered at its own origin, y-up, at the
-// SVG's natural scale (scaled to artSize mm at placement time).
-let mutable private artShapes: Shape list = []
-let mutable private artNaturalW = 0.0
-let mutable private artNaturalH = 0.0
-let mutable private artSize = 20.0
-let mutable private artColor = "#ef4444"
-/// User-dragged artwork position; None = automatic (right of the text).
-let mutable private artPos: Pt option = None
-let mutable private artCenterActual = { X = 0.0; Y = 0.0 }
-let mutable private artRadiusActual = 0.0
+// --- SVG artwork bank + placed instances -----------------------------------
+// The bank is a library of uploaded SVGs (persisted in localStorage); each
+// bank entry can be placed on the keychain any number of times. Instances
+// carry their own size, color and position.
+
+/// One uploaded SVG in the bank: raw markup for the thumbnail/persistence
+/// plus shapes normalized to the origin (y-up, natural SVG scale).
+type private BankItem =
+    { Name: string
+      Svg: string
+      BShapes: Shape list
+      NatW: float
+      NatH: float }
+
+/// One artwork placed on the keychain.
+type private ArtInst =
+    { AShapes: Shape list
+      NatW: float
+      NatH: float
+      AName: string
+      mutable Size: float
+      mutable Color: string
+      mutable Pos: Pt }
+
+let private bank = ResizeArray<BankItem>()
+let private arts = System.Collections.Generic.Dictionary<int, ArtInst>()
+let private artOrder = ResizeArray<int>()
+let private artZones = System.Collections.Generic.Dictionary<int, Pt * float>()
+let mutable private artCounter = 0
+let mutable private activeArt: int option = None
+let private artDefaultSize = 15.0
+let private artColors = [| "#ef4444"; "#22d3ee"; "#eab308"; "#10b981"; "#ec4899"; "#3b82f6" |]
+let mutable private artColorCursor = 0
 
 let mutable private viewer: obj = null
 
@@ -76,7 +98,7 @@ let mutable private glyphShapesCache: Shape list = []
 let mutable private blobCache: Ring array = [||]
 let mutable private basePositions: float array = [||]
 let mutable private textPositions: float array = [||]
-let mutable private artPositions: float array = [||]
+let private artPositions = System.Collections.Generic.Dictionary<int, float array>()
 
 /// Curve flattening tolerance for glyph outlines, in mm.
 let private glyphTol = 0.02
@@ -128,7 +150,8 @@ let private updateReadouts () =
             i <- i + 3
         sizeEl.textContent <-
             sprintf "%.1f × %.1f × %.1f mm" (maxX - minX) (maxY - minY) (baseH + textH)
-        triEl.textContent <- string ((basePositions.Length + textPositions.Length + artPositions.Length) / 9)
+        let artTotal = artPositions.Values |> Seq.sumBy (fun a -> a.Length)
+        triEl.textContent <- string ((basePositions.Length + textPositions.Length + artTotal) / 9)
 
 let private updateExportState () =
     let has = basePositions.Length > 0
@@ -137,39 +160,31 @@ let private updateExportState () =
     (inputById "export-separate").disabled <- not has
     (byId "viewer-hint")?style?display <- if has then "none" else ""
 
-/// Artwork shapes scaled to artSize and moved into place (user-dragged or
-/// auto-parked right of the text). Hole-fill threshold applies in final mm.
-let private placedArt () : Shape list =
-    if artShapes.IsEmpty || artNaturalH <= 0.0 then []
+/// One instance's shapes scaled to its size and moved to its position.
+/// Hole-fill threshold applies in final mm.
+let private placedInst (inst: ArtInst) : Shape list =
+    if inst.AShapes.IsEmpty || inst.NatH <= 0.0 then []
     else
-        let s = artSize / artNaturalH
-        let pos =
-            match artPos with
-            | Some p -> p
-            | None ->
-                match Geometry.bounds glyphShapesCache with
-                | Some (_, _, maxX, _) -> { X = maxX + border + (artNaturalW * s) / 2.0 + 1.0; Y = 0.0 }
-                | None -> { X = 0.0; Y = 0.0 }
-        artShapes
-        |> List.map (Geometry.mapShape (fun p -> { X = p.X * s + pos.X; Y = p.Y * s + pos.Y }))
+        let s = inst.Size / inst.NatH
+        inst.AShapes
+        |> List.map (Geometry.mapShape (fun p -> { X = p.X * s + inst.Pos.X; Y = p.Y * s + inst.Pos.Y }))
         |> List.map (fun sh ->
             { sh with Holes = sh.Holes |> List.filter (fun h -> abs (Rings.signedArea h) >= holeFill) })
 
-/// Rebuild meshes from the cached text shapes + artwork (heights, ring,
-/// artwork placement, colors). The base blob hugs text AND artwork.
+/// Rebuild meshes from the cached text shapes + placed artworks (heights,
+/// ring, artwork placement, colors). The base blob hugs text AND artwork.
 let private rebuildMeshes () =
-    let art = placedArt ()
-    let content = glyphShapesCache @ art
+    let placed = [ for id in artOrder -> id, placedInst arts.[id] ]
+    let content = glyphShapesCache @ (placed |> List.collect snd)
     if content.IsEmpty then
         blobCache <- [||]
         basePositions <- [||]
         textPositions <- [||]
-        artPositions <- [||]
-        artRadiusActual <- 0.0
+        artPositions.Clear ()
+        artZones.Clear ()
         if not (isNull viewer) then
             Viewer.removeMesh viewer "base"
             Viewer.removeMesh viewer "text"
-            Viewer.removeMesh viewer "art"
     else
         blobCache <-
             content
@@ -218,23 +233,26 @@ let private rebuildMeshes () =
                     acc.AddRange (Geometry.translateZ (baseH - sink) p)
                 acc.ToArray()
         textPositions <- extrudeRaised glyphShapesCache
-        artPositions <- extrudeRaised art
-
-        // Artwork drag zone: bounding circle of the placed artwork.
-        match Geometry.bounds art with
-        | Some (minX, minY, maxX, maxY) ->
-            artCenterActual <- { X = (minX + maxX) / 2.0; Y = (minY + maxY) / 2.0 }
-            let w = maxX - minX
-            let h = maxY - minY
-            artRadiusActual <- sqrt (w * w + h * h) / 2.0
-        | None -> artRadiusActual <- 0.0
+        artPositions.Clear ()
+        artZones.Clear ()
+        for (id, shapes) in placed do
+            artPositions.[id] <- extrudeRaised shapes
+            // Drag zone: bounding circle of the placed instance.
+            match Geometry.bounds shapes with
+            | Some (minX, minY, maxX, maxY) ->
+                let w = maxX - minX
+                let h = maxY - minY
+                artZones.[id] <- ({ X = (minX + maxX) / 2.0; Y = (minY + maxY) / 2.0 }, sqrt (w * w + h * h) / 2.0)
+            | None -> ()
 
         if not (isNull viewer) then
             Viewer.setMesh viewer "base" basePositions baseColor
             if textPositions.Length > 0 then Viewer.setMesh viewer "text" textPositions textColor
             else Viewer.removeMesh viewer "text"
-            if artPositions.Length > 0 then Viewer.setMesh viewer "art" artPositions artColor
-            else Viewer.removeMesh viewer "art"
+            for (id, _) in placed do
+                let pos = artPositions.[id]
+                if pos.Length > 0 then Viewer.setMesh viewer (sprintf "art-%d" id) pos arts.[id].Color
+                else Viewer.removeMesh viewer (sprintf "art-%d" id)
     updateReadouts ()
     updateExportState ()
 
@@ -303,60 +321,185 @@ let private scheduleMeshes () =
         |> ignore
 
 // ---------------------------------------------------------------------------
-// Artwork SVG import
+// Artwork bank: upload, thumbnails, placement
 // ---------------------------------------------------------------------------
 
-/// Parse an uploaded SVG into artwork shapes: flatten every drawable element
+[<Emit("encodeURIComponent($0)")>]
+let private encodeURIComponentJs (s: string) : string = jsNative
+
+[<Emit("(function(){ try { return localStorage.getItem($0); } catch { return null; } })()")>]
+let private lsGet (key: string) : string = jsNative
+
+[<Emit("(function(){ try { localStorage.setItem($0, $1); } catch {} })()")>]
+let private lsSet (key: string) (v: string) : unit = jsNative
+
+[<Emit("JSON.stringify($0)")>]
+let private jsonStringify (o: obj) : string = jsNative
+
+[<Emit("(function(){ try { return JSON.parse($0); } catch { return null; } })()")>]
+let private jsonParse (s: string) : obj = jsNative
+
+let private bankStorageKey = "3dsh-svg-bank"
+
+/// Parse SVG markup into normalized shapes: flatten every drawable element
 /// (transforms applied, holes classified), center at the origin, flip y-down
-/// -> y-up, and merge overlaps into clean solids.
-let private loadArtSvg (name: string) (svgText: string) =
+/// -> y-up, merge overlaps. Returns None when nothing fillable was found.
+let private parseSvgShapes (svgText: string) : (Shape list * float * float) option =
     let holder = document.createElement "div"
     holder.setAttribute ("style", "position:fixed;left:-100000px;top:0;")
     holder.innerHTML <- svgText
     document.body.appendChild holder |> ignore
-    let cleanup () = document.body.removeChild holder |> ignore
     let svg = holder.querySelector "svg"
-    if isNull svg then
-        cleanup ()
-        window.alert "That file doesn't contain a valid <svg> element."
-    else
-        let scripts = svg.querySelectorAll "script"
-        for k in 0 .. scripts.length - 1 do
-            let s = scripts.[k] :?> Element
-            s.parentElement.removeChild s |> ignore
-        // Flattening tolerance relative to the artwork's own scale: after
-        // scaling to keychain size the chord error stays well under 0.05mm.
-        let bb: obj = svg?getBBox ()
-        let tol = max 1e-6 ((max (bb?width: float) (bb?height: float)) / 800.0)
-        let shapes = ResizeArray<Shape>()
-        let mutable openCount = 0
-        let drawables = svg.querySelectorAll "path, rect, circle, ellipse, polygon, polyline"
-        for k in 0 .. drawables.length - 1 do
-            let el = drawables.[k] :?> Element
-            if (el.closest "defs, clipPath, mask, symbol, pattern").IsNone then
-                let pe = SvgFlatten.parseElement svg tol (string k) "" el
-                openCount <- openCount + pe.OpenSubpaths
-                for s in pe.Shapes do
-                    shapes.Add s
-        cleanup ()
-        match Geometry.bounds shapes with
-        | None -> window.alert "No fillable shapes found in that SVG."
-        | Some (minX, minY, maxX, maxY) ->
-            let cx = (minX + maxX) / 2.0
-            let cy = (minY + maxY) / 2.0
-            artShapes <-
-                shapes
-                |> List.ofSeq
-                |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
-                |> Clipper.unionShapes
-            artNaturalW <- maxX - minX
-            artNaturalH <- maxY - minY
-            artPos <- None
-            (byId "art-name").textContent <-
-                name + (if openCount > 0 then sprintf " · ⚠ %d open subpath(s) auto-closed" openCount else "")
-            (byId "art-remove")?style?display <- ""
-            rebuildMeshes ()
-            if not (isNull viewer) then Viewer.fitView viewer
+    let result =
+        if isNull svg then None
+        else
+            let scripts = svg.querySelectorAll "script"
+            for k in 0 .. scripts.length - 1 do
+                let s = scripts.[k] :?> Element
+                s.parentElement.removeChild s |> ignore
+            // Flattening tolerance relative to the artwork's own scale: after
+            // scaling to keychain size the chord error stays under 0.05mm.
+            let bb: obj = svg?getBBox ()
+            let tol = max 1e-6 ((max (bb?width: float) (bb?height: float)) / 800.0)
+            let shapes = ResizeArray<Shape>()
+            let drawables = svg.querySelectorAll "path, rect, circle, ellipse, polygon, polyline"
+            for k in 0 .. drawables.length - 1 do
+                let el = drawables.[k] :?> Element
+                if (el.closest "defs, clipPath, mask, symbol, pattern").IsNone then
+                    let pe = SvgFlatten.parseElement svg tol (string k) "" el
+                    for s in pe.Shapes do
+                        shapes.Add s
+            match Geometry.bounds shapes with
+            | None -> None
+            | Some (minX, minY, maxX, maxY) ->
+                let cx = (minX + maxX) / 2.0
+                let cy = (minY + maxY) / 2.0
+                let normalized =
+                    shapes
+                    |> List.ofSeq
+                    |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
+                    |> Clipper.unionShapes
+                Some (normalized, maxX - minX, maxY - minY)
+    document.body.removeChild holder |> ignore
+    result
+
+let private renderBank () =
+    let box = byId "art-bank"
+    (byId "bank-empty")?style?display <- if bank.Count = 0 then "" else "none"
+    box.innerHTML <-
+        bank
+        |> Seq.mapi (fun i item ->
+            sprintf
+                """<div class="bank-item" data-i="%d" title="%s — click to add"><img src="data:image/svg+xml,%s" alt="%s" /><button type="button" class="bank-x" title="Remove from bank">×</button></div>"""
+                i item.Name (encodeURIComponentJs item.Svg) item.Name)
+        |> String.concat ""
+
+let private saveBank () =
+    let items = bank |> Seq.map (fun b -> createObj [ "name" ==> b.Name; "svg" ==> b.Svg ]) |> Array.ofSeq
+    lsSet bankStorageKey (jsonStringify items)
+
+let private renderArtList () =
+    let ul = byId "art-list"
+    (byId "art-placed-wrap")?style?display <- if artOrder.Count = 0 then "none" else ""
+    ul.innerHTML <-
+        artOrder
+        |> Seq.map (fun id ->
+            let inst = arts.[id]
+            sprintf
+                """<li data-id="%d" class="%s"><span class="swatch" style="background:%s"></span><span class="l-name">%s</span><span class="l-h">%.1f mm</span><button class="l-x" title="Remove from keychain">×</button></li>"""
+                id (if activeArt = Some id then "active" else "") inst.Color inst.AName inst.Size)
+        |> String.concat ""
+
+/// Point the size slider + color input at the active instance.
+let private syncArtEditor () =
+    match activeArt with
+    | Some id when arts.ContainsKey id ->
+        (inputById "art-size").value <- string arts.[id].Size
+        (byId "art-size-val").textContent <- sprintf "%.1f mm" arts.[id].Size
+        (inputById "art-color").value <- arts.[id].Color
+    | _ -> ()
+
+let private setActiveArt (id: int option) =
+    activeArt <- id
+    renderArtList ()
+    syncArtEditor ()
+
+let private removeInstance (id: int) =
+    arts.Remove id |> ignore
+    artOrder.Remove id |> ignore
+    artPositions.Remove id |> ignore
+    artZones.Remove id |> ignore
+    if not (isNull viewer) then Viewer.removeMesh viewer (sprintf "art-%d" id)
+    if activeArt = Some id then
+        activeArt <- if artOrder.Count > 0 then Some artOrder.[artOrder.Count - 1] else None
+    rebuildMeshes ()
+    renderArtList ()
+    syncArtEditor ()
+
+let private addFromBank (item: BankItem) =
+    artCounter <- artCounter + 1
+    let id = artCounter
+    // Park right of everything currently on the keychain.
+    let existing = glyphShapesCache @ (artOrder |> Seq.collect (fun i -> placedInst arts.[i]) |> List.ofSeq)
+    let halfW = (item.NatW * (artDefaultSize / max 1e-9 item.NatH)) / 2.0
+    let pos =
+        match Geometry.bounds existing with
+        | Some (_, _, maxX, _) -> { X = maxX + border + halfW + 1.0; Y = 0.0 }
+        | None -> { X = 0.0; Y = 0.0 }
+    let inst =
+        { AShapes = item.BShapes
+          NatW = item.NatW
+          NatH = item.NatH
+          AName = item.Name
+          Size = artDefaultSize
+          Color = artColors.[artColorCursor % artColors.Length]
+          Pos = pos }
+    artColorCursor <- artColorCursor + 1
+    arts.[id] <- inst
+    artOrder.Add id
+    // Every instance is its own drag target; dead ids just return null.
+    if not (isNull viewer) then
+        Viewer.registerDrag
+            viewer
+            (fun () ->
+                match artZones.TryGetValue id with
+                | true, (c, r) when arts.ContainsKey id -> createObj [ "X" ==> c.X; "Y" ==> c.Y; "R" ==> r ]
+                | _ -> null)
+            (fun p ->
+                match arts.TryGetValue id with
+                | true, inst ->
+                    inst.Pos <- { X = p?x; Y = p?y }
+                    if activeArt <> Some id then setActiveArt (Some id)
+                    scheduleMeshes ()
+                | _ -> ())
+    setActiveArt (Some id)
+    rebuildMeshes ()
+    if not (isNull viewer) then Viewer.fitView viewer
+
+let private addToBank (name: string) (svgText: string) =
+    match parseSvgShapes svgText with
+    | None -> window.alert (sprintf "No fillable shapes found in %s." name)
+    | Some (shapes, w, h) ->
+        bank.Add { Name = name; Svg = svgText; BShapes = shapes; NatW = w; NatH = h }
+        renderBank ()
+        saveBank ()
+
+let private loadBankFromStorage () =
+    let raw = lsGet bankStorageKey
+    if not (isNull raw) then
+        let items: obj = jsonParse raw
+        if not (isNull items) then
+            let n: int = items?length
+            for k in 0 .. n - 1 do
+                let it: obj = items?(k)
+                let name: string = it?name
+                let svg: string = it?svg
+                if not (isNull (box svg)) then
+                    match parseSvgShapes svg with
+                    | Some (shapes, w, h) ->
+                        bank.Add { Name = name; Svg = svg; BShapes = shapes; NatW = w; NatH = h }
+                    | None -> ()
+            renderBank ()
 
 // ---------------------------------------------------------------------------
 // Export
@@ -378,17 +521,26 @@ let private saveStl (filename: string) (buf: obj) =
         thenDo (saveToFolder folderHandle filename buf) (fun _ ->
             note.textContent <- sprintf "Saved %s to folder" filename)
 
+let private artParts () =
+    [ for id in artOrder do
+        match artPositions.TryGetValue id with
+        | true, p when p.Length > 0 -> p
+        | _ -> () ]
+
 let private exportCombined () =
     if basePositions.Length > 0 then
-        saveStl (safeName () + ".stl") (Stl.build [ basePositions; textPositions; artPositions ])
+        saveStl (safeName () + ".stl") (Stl.build (basePositions :: textPositions :: artParts ()))
 
 let private exportSeparate () =
     if basePositions.Length > 0 then
         saveStl (safeName () + "-base.stl") (Stl.build [ basePositions ])
         if textPositions.Length > 0 then
             saveStl (safeName () + "-text.stl") (Stl.build [ textPositions ])
-        if artPositions.Length > 0 then
-            saveStl (safeName () + "-art.stl") (Stl.build [ artPositions ])
+        let parts = artParts ()
+        parts
+        |> List.iteri (fun i p ->
+            let suffix = if parts.Length = 1 then "-art" else sprintf "-art%d" (i + 1)
+            saveStl (safeName () + suffix + ".stl") (Stl.build [ p ]))
 
 // ---------------------------------------------------------------------------
 // UI wiring
@@ -438,14 +590,7 @@ let private init () =
         (fun p ->
             ringPos <- Some { X = p?x; Y = p?y }
             scheduleMeshes ())
-    Viewer.registerDrag
-        viewer
-        (fun () ->
-            if artRadiusActual <= 0.0 then null
-            else createObj [ "X" ==> artCenterActual.X; "Y" ==> artCenterActual.Y; "R" ==> artRadiusActual ])
-        (fun p ->
-            artPos <- Some { X = p?x; Y = p?y }
-            scheduleMeshes ())
+    // (Artwork instances register their own drag targets when placed.)
 
     // Font upload + selection.
     let fontInput = inputById "font-files"
@@ -512,37 +657,60 @@ let private init () =
             if not (isNull viewer) then Viewer.setColor viewer "text" textColor
     )
 
-    // Artwork SVG upload / remove / color.
+    // Artwork bank: upload (multiple), click a thumbnail to place, × removes.
     let artInput = inputById "art-file"
     (byId "art-btn").addEventListener ("click", fun _ -> artInput.click ())
     artInput.addEventListener (
         "change",
         fun _ ->
             let files: obj = artInput?files
-            let file: obj = files?item (0)
-            if not (isNull file) then
+            let n: int = files?length
+            for k in 0 .. n - 1 do
+                let file: obj = files?item (k)
                 let name: string = !!(file?name)
                 if name.ToLower().EndsWith ".svg" then
-                    readFileText file (fun t -> loadArtSvg name t)
+                    readFileText file (fun t -> addToBank name t)
                 else
-                    window.alert "Please choose an .svg file."
+                    window.alert (sprintf "%s is not an .svg file." name)
             artInput.value <- ""
     )
-    (byId "art-remove").addEventListener (
+    (byId "art-bank").addEventListener (
         "click",
-        fun _ ->
-            artShapes <- []
-            artPos <- None
-            artRadiusActual <- 0.0
-            (byId "art-name").textContent <- "No artwork loaded"
-            (byId "art-remove")?style?display <- "none"
-            scheduleMeshes ()
+        fun ev ->
+            let target = ev.target :?> Element
+            match target.closest ".bank-item" with
+            | Some item ->
+                let i = int (parseFloatJs (item.getAttribute "data-i"))
+                if i >= 0 && i < bank.Count then
+                    if target.classList.contains "bank-x" then
+                        bank.RemoveAt i
+                        renderBank ()
+                        saveBank ()
+                    else
+                        addFromBank bank.[i]
+            | None -> ()
+    )
+    // Placed-artwork list: click a row to edit it, × removes it.
+    (byId "art-list").addEventListener (
+        "click",
+        fun ev ->
+            let target = ev.target :?> Element
+            match target.closest "[data-id]" with
+            | Some row ->
+                let id = int (parseFloatJs (row.getAttribute "data-id"))
+                if target.classList.contains "l-x" then removeInstance id
+                else setActiveArt (Some id)
+            | None -> ()
     )
     (inputById "art-color").addEventListener (
         "input",
         fun _ ->
-            artColor <- (inputById "art-color").value
-            if not (isNull viewer) then Viewer.setColor viewer "art" artColor
+            match activeArt with
+            | Some id when arts.ContainsKey id ->
+                arts.[id].Color <- (inputById "art-color").value
+                if not (isNull viewer) then Viewer.setColor viewer (sprintf "art-%d" id) arts.[id].Color
+                renderArtList ()
+            | _ -> ()
     )
 
     // Keyring on/off: off = plain nameplate.
@@ -566,7 +734,13 @@ let private init () =
     bindSlider "ring-thick" mm (fun v -> ringThick <- v; scheduleMeshes ())
     bindSlider "base-h" mm (fun v -> baseH <- v; scheduleMeshes ())
     bindSlider "text-h" mm (fun v -> textH <- v; scheduleMeshes ())
-    bindSlider "art-size" mm (fun v -> artSize <- v; scheduleMeshes ())
+    bindSlider "art-size" mm (fun v ->
+        match activeArt with
+        | Some id when arts.ContainsKey id ->
+            arts.[id].Size <- v
+            renderArtList ()
+            scheduleMeshes ()
+        | _ -> ())
 
     // Reset: restore defaults (fonts, folder and text survive).
     (byId "reset-btn").addEventListener (
@@ -575,8 +749,15 @@ let private init () =
             for (id, v) in defaults do
                 (inputById id).value <- v
             ringPos <- None
-            artPos <- None
-            artSize <- 20.0
+            // Clear placed artworks (the bank itself survives).
+            for id in artOrder |> Seq.toArray do
+                arts.Remove id |> ignore
+                artPositions.Remove id |> ignore
+                artZones.Remove id |> ignore
+                if not (isNull viewer) then Viewer.removeMesh viewer (sprintf "art-%d" id)
+            artOrder.Clear ()
+            activeArt <- None
+            renderArtList ()
             ringEnabled <- true
             (inputById "ring-enabled").``checked`` <- true
             (byId "ring-controls").classList.remove "off"
@@ -612,8 +793,14 @@ let private init () =
         ringPos <- Some { X = p?x; Y = p?y }
         rebuildMeshes ())
     window?__setArt <- (fun (p: obj) ->
-        artPos <- Some { X = p?x; Y = p?y }
-        rebuildMeshes ())
+        match activeArt with
+        | Some id when arts.ContainsKey id ->
+            arts.[id].Pos <- { X = p?x; Y = p?y }
+            rebuildMeshes ()
+        | _ -> ())
+
+    loadBankFromStorage ()
+    renderArtList ()
 
     // Bundled default font so the app works with zero setup.
     thenDo (TextShapes.loadDefaultFont ()) (fun font ->

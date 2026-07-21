@@ -209,44 +209,70 @@ try {
     `letter spacing controls the real outline gap (width grew ${grown.toFixed(1)}mm for +3mm x 4 gaps)`
   );
 
-  // --- SVG artwork: auto-extruded to text height, draggable, own STL ---
+  // --- SVG artwork bank: upload once, place from the bank, drag, export ---
   // State here: base-h 6, text-h 2, letter-spacing 3, ring buried at center.
   await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'heart.svg'));
   await page.waitForTimeout(400);
+  check((await page.locator('.bank-item').count()) === 1, 'uploaded SVG appears in the bank');
+
+  await page.click('.bank-item');
+  await page.waitForTimeout(300);
+  check((await page.locator('#art-list li').count()) === 1, 'clicking a bank item places it on the keychain');
   const withArt = parseStl((await download('#export-combined')).buf);
   check(withArt.badEdges === 0, 'artwork combined export watertight');
   check(withArt.volume > spaced.volume + 100, `artwork adds volume (${spaced.volume.toFixed(0)} -> ${withArt.volume.toFixed(0)} mm³)`);
   check(Math.abs(withArt.maxZ - 8) < 1e-3, `artwork does not change total height (maxZ=${withArt.maxZ})`);
 
-  // Separate export now emits a third artwork STL at the text's z-range.
-  const q2 = [];
-  const onD2 = (d) => q2.push(d);
-  page.on('download', onD2);
-  await page.click('#export-separate');
-  const dl2 = Date.now() + 10000;
-  while (q2.length < 3 && Date.now() < dl2) await page.waitForTimeout(100);
-  page.off('download', onD2);
-  const names2 = q2.map((d) => d.suggestedFilename());
-  check(names2.includes('KAI JO-art.stl'), `separate export includes artwork STL (${names2.join(', ')})`);
-  const artDl = q2.find((d) => d.suggestedFilename() === 'KAI JO-art.stl');
-  const artPath = path.join(tmp, 'KAI JO-art.stl');
-  await artDl.saveAs(artPath);
-  const art = parseStl(readFileSync(artPath));
+  // Separate export emits one artwork STL per placed instance.
+  const collect = async (expected) => {
+    const q = [];
+    const on = (d) => q.push(d);
+    page.on('download', on);
+    await page.click('#export-separate');
+    const t = Date.now() + 10000;
+    while (q.length < expected && Date.now() < t) await page.waitForTimeout(100);
+    page.off('download', on);
+    const named = {};
+    for (const dl of q) {
+      const p = path.join(tmp, dl.suggestedFilename());
+      await dl.saveAs(p);
+      named[dl.suggestedFilename()] = readFileSync(p);
+    }
+    return named;
+  };
+  const sep1 = await collect(3);
+  check('KAI JO-art.stl' in sep1, `separate export includes artwork STL (${Object.keys(sep1).join(', ')})`);
+  const art = parseStl(sep1['KAI JO-art.stl']);
   check(
     Math.abs(art.minZ - 5.8) < 1e-3 && Math.abs(art.maxZ - 8) < 1e-3,
     `artwork spans base..base+text with 0.2mm sink (${art.minZ}..${art.maxZ})`
   );
   check(art.badEdges === 0, 'artwork STL watertight (heart hole preserved)');
 
-  // Drag the artwork far above the name: the base blob must grow under it.
+  // Place a SECOND instance from the same bank item and drag it (the hook
+  // moves the active = newest instance): the base must grow under it.
+  await page.click('.bank-item');
+  await page.waitForTimeout(300);
+  check((await page.locator('#art-list li').count()) === 2, 'same bank item can be placed twice');
   await page.evaluate(() => window.__setArt({ x: 0, y: 60 }));
   await page.waitForTimeout(300);
   const movedArt = parseStl((await download('#export-combined')).buf);
-  check(movedArt.badEdges === 0, 'moved-artwork export watertight');
+  check(movedArt.badEdges === 0, 'two-artwork export watertight');
   check(
     movedArt.maxY > withArt.maxY + 20,
     `base grows under dragged artwork (maxY ${withArt.maxY.toFixed(1)} -> ${movedArt.maxY.toFixed(1)})`
   );
+  const sep2 = await collect(4);
+  check(
+    'KAI JO-art1.stl' in sep2 && 'KAI JO-art2.stl' in sep2,
+    `separate export names each instance (${Object.keys(sep2).join(', ')})`
+  );
+
+  // Removing a placed instance from the list leaves the bank untouched.
+  await page.click('#art-list li:last-child .l-x');
+  await page.waitForTimeout(200);
+  check((await page.locator('#art-list li').count()) === 1, 'placed instance removed via list ×');
+  check((await page.locator('.bank-item').count()) === 1, 'bank still holds the SVG');
 
   await page.screenshot({ path: path.join(ROOT, 'e2e-screenshot.png') });
   check(pageErrors.length === 0, `no console/page errors${pageErrors.length ? ': ' + pageErrors.join(' | ') : ''}`);
