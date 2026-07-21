@@ -274,6 +274,35 @@ try {
   check((await page.locator('#art-list li').count()) === 1, 'placed instance removed via list ×');
   check((await page.locator('.bank-item').count()) === 1, 'bank still holds the SVG');
 
+  // --- Letter Specific Adjustments ---
+  // Clean slate for width math: remove the last artwork and bury the ring.
+  await page.click('#art-list li:last-child .l-x');
+  await page.evaluate(() => window.__setRing({ x: 0, y: 0 }));
+  await page.waitForTimeout(300);
+  check((await page.locator('.letter-btn').count()) === 5, 'letter buttons match visible letters (KAI JO -> 5)');
+
+  const beforeAdj = parseStl((await download('#export-combined')).buf);
+  await page.click('.letter-btn[data-i="2"]'); // the "I"
+  await page.fill('#letter-adjust', '4');
+  await page.dispatchEvent('#letter-adjust', 'input');
+  await page.waitForTimeout(300);
+  const adj = parseStl((await download('#export-combined')).buf);
+  const adjGrow = adj.maxX - adj.minX - (beforeAdj.maxX - beforeAdj.minX);
+  check(
+    adjGrow > 3.4 && adjGrow < 4.6,
+    `+4mm shift at a letter widens the model by ~4mm (${adjGrow.toFixed(1)})`
+  );
+  check(adj.badEdges === 0, 'letter-adjusted export watertight');
+  check((await page.locator('.letter-btn.adjusted').count()) === 1, 'adjusted letter is marked');
+
+  await page.click('#letter-adjust-clear');
+  await page.waitForTimeout(300);
+  const cleared = parseStl((await download('#export-combined')).buf);
+  check(
+    Math.abs(cleared.maxX - cleared.minX - (beforeAdj.maxX - beforeAdj.minX)) < 0.2,
+    'clear-all restores the original width'
+  );
+
   await page.screenshot({ path: path.join(ROOT, 'e2e-screenshot.png') });
   check(pageErrors.length === 0, `no console/page errors${pageErrors.length ? ': ' + pageErrors.join(' | ') : ''}`);
 } finally {

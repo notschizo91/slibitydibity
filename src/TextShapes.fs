@@ -66,8 +66,10 @@ let glyphShapes (tol: float) (minHoleArea: float) (commands: obj array) : Shape 
     |> List.map (fun s ->
         { s with Holes = s.Holes |> List.filter (fun h -> abs (Rings.signedArea h) >= minHoleArea) })
 
-/// One glyph ready for optical placement.
-type GlyphIn = { GShapes: Shape list; WordBreak: bool }
+/// One glyph ready for optical placement. Adjust is a per-letter mm shift
+/// applied to this glyph AND everything after it (positions cascade), used
+/// to fix fonts that scrunch specific letter pairs.
+type GlyphIn = { GShapes: Shape list; WordBreak: bool; Adjust: float }
 
 /// Place glyphs left to right with *optical* spacing: each glyph is shifted
 /// so the minimal horizontal clearance between its outline and everything
@@ -129,16 +131,17 @@ let layoutOptical (gap: float) (wordExtra: float) (glyphs: GlyphIn list) : Shape
                     if p.X > gMaxX then gMaxX <- p.X
             let spacing = gap + (if g.WordBreak then wordExtra else 0.0)
             let offset =
-                if first then -gMinX
-                else
-                    let mutable req = negInf
-                    for bk in 0 .. n - 1 do
-                        if placedRight.[bk] > negInf && left.[bk] < infinity then
-                            let need = placedRight.[bk] + spacing - left.[bk]
-                            if need > req then req <- need
-                    // No vertical overlap with anything placed (e.g. quotes
-                    // vs a low letter): fall back to bounding boxes.
-                    if req = negInf then placedMaxX + spacing - gMinX else req
+                (if first then -gMinX
+                 else
+                     let mutable req = negInf
+                     for bk in 0 .. n - 1 do
+                         if placedRight.[bk] > negInf && left.[bk] < infinity then
+                             let need = placedRight.[bk] + spacing - left.[bk]
+                             if need > req then req <- need
+                     // No vertical overlap with anything placed (e.g. quotes
+                     // vs a low letter): fall back to bounding boxes.
+                     if req = negInf then placedMaxX + spacing - gMinX else req)
+                + g.Adjust
             first <- false
             for s in g.GShapes do
                 out.Add (Geometry.mapShape (fun p -> { X = p.X + offset; Y = p.Y }) s)

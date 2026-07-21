@@ -550,3 +550,53 @@ input[type="range"]::-moz-range-thumb {
 .l-x:hover {
   color: #ef4444;
 }
+
+/* ---------- letter specific adjustments ---------- */
+
+.chip-cyan {
+  background: linear-gradient(135deg, #22d3ee, #3b82f6);
+}
+
+.letter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.letter-btn {
+  position: relative;
+  min-width: 30px;
+  height: 32px;
+  padding: 0 7px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(75, 85, 99, 0.7);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.letter-btn:hover {
+  border-color: var(--accent-primary);
+}
+
+.letter-btn.active {
+  border-color: var(--accent-primary);
+  background: rgba(168, 85, 247, 0.22);
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.4);
+}
+
+.letter-btn.adjusted::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-secondary);
+}

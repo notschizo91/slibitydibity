@@ -51,6 +51,10 @@ let mutable private baseH = 3.0
 let mutable private textH = 2.0
 let mutable private baseColor = "#7c3aed"
 let mutable private textColor = "#ffffff"
+/// Per-letter shift (mm), keyed by visible-letter index: moves that letter
+/// and everything after it. Cleared when the text changes.
+let private letterAdjust = System.Collections.Generic.Dictionary<int, float>()
+let mutable private activeLetter: int option = None
 /// User-dragged keyring position; None = automatic (left of the blob).
 let mutable private ringPos: Pt option = None
 let mutable private ringCenterActual = { X = 0.0; Y = 0.0 }
@@ -274,9 +278,13 @@ let private rebuildText () =
             let glyphIns: TextShapes.GlyphIn list =
                 glyphArr
                 |> Array.toList
-                |> List.map (fun g ->
+                |> List.mapi (fun i g ->
                     { GShapes = TextShapes.glyphShapes glyphTol holeFill (g?commands)
-                      WordBreak = g?wordBreak })
+                      WordBreak = g?wordBreak
+                      Adjust =
+                        match letterAdjust.TryGetValue i with
+                        | true, v -> v
+                        | _ -> 0.0 })
             // Optical spacing: the slider is the true outline-to-outline gap,
             // independent of the font's (often unreliable) metrics. Then union
             // everything: script fonts build glyphs from overlapping strokes
@@ -319,6 +327,48 @@ let private scheduleMeshes () =
             meshQueued <- false
             rebuildMeshes ()), 40)
         |> ignore
+
+// ---------------------------------------------------------------------------
+// Letter Specific Adjustments
+// ---------------------------------------------------------------------------
+
+/// Visible (non-whitespace) letters of the current text, in glyph order —
+/// the same indexing the layout uses.
+let private visibleLetters () =
+    text.Trim().ToCharArray()
+    |> Array.filter (fun c -> not (Char.IsWhiteSpace c))
+
+let private syncLetterSlider () =
+    let wrap = byId "letter-adjust-wrap"
+    match activeLetter with
+    | Some i ->
+        wrap?style?display <- ""
+        let letters = visibleLetters ()
+        let name = if i < letters.Length then sprintf "[%c] #%d" letters.[i] (i + 1) else ""
+        (byId "letter-adjust-name").textContent <- name
+        let v =
+            match letterAdjust.TryGetValue i with
+            | true, x -> x
+            | _ -> 0.0
+        (inputById "letter-adjust").value <- string v
+        (byId "letter-adjust-val").textContent <- sprintf "%+.1f mm" v
+    | None -> wrap?style?display <- "none"
+
+let private renderLetterButtons () =
+    let box = byId "letter-btns"
+    let letters = visibleLetters ()
+    (byId "letters-empty")?style?display <- if letters.Length = 0 then "" else "none"
+    box.innerHTML <-
+        letters
+        |> Array.mapi (fun i c ->
+            let adjusted = letterAdjust.ContainsKey i && letterAdjust.[i] <> 0.0
+            sprintf
+                """<button type="button" class="letter-btn%s%s" data-i="%d">%c</button>"""
+                (if activeLetter = Some i then " active" else "")
+                (if adjusted then " adjusted" else "")
+                i c)
+        |> String.concat ""
+    syncLetterSlider ()
 
 // ---------------------------------------------------------------------------
 // Artwork bank: upload, thumbnails, placement
@@ -635,13 +685,51 @@ let private init () =
         (byId "folder-label")?style?display <- "none"
         (byId "folder-name").textContent <- "Save folder needs Chrome/Edge — exports download normally"
 
-    // Keychain text.
+    // Keychain text. Editing the text invalidates letter indices, so
+    // per-letter adjustments reset with it.
     let textInput = inputById "text-input"
     let updateText () =
         text <- textInput.value
         (byId "char-count").textContent <- sprintf "%d/15 characters" text.Length
+        letterAdjust.Clear ()
+        activeLetter <- None
+        renderLetterButtons ()
         scheduleText ()
     textInput.addEventListener ("input", fun _ -> updateText ())
+
+    // Letter Specific Adjustments: click a letter, shift it and everything
+    // after it left/right.
+    (byId "letter-btns").addEventListener (
+        "click",
+        fun ev ->
+            let target = ev.target :?> Element
+            match target.closest ".letter-btn" with
+            | Some btn ->
+                activeLetter <- Some (int (parseFloatJs (btn.getAttribute "data-i")))
+                renderLetterButtons ()
+            | None -> ()
+    )
+    let letterSlider = inputById "letter-adjust"
+    letterSlider.addEventListener (
+        "input",
+        fun _ ->
+            match activeLetter with
+            | Some i ->
+                let v = parseFloatJs letterSlider.value
+                if not (Double.IsNaN v) then
+                    if v = 0.0 then letterAdjust.Remove i |> ignore else letterAdjust.[i] <- v
+                    (byId "letter-adjust-val").textContent <- sprintf "%+.1f mm" v
+                    renderLetterButtons ()
+                    scheduleText ()
+            | None -> ()
+    )
+    (byId "letter-adjust-clear").addEventListener (
+        "click",
+        fun _ ->
+            letterAdjust.Clear ()
+            renderLetterButtons ()
+            scheduleText ()
+    )
 
     // Colors (mesh-only refresh).
     (inputById "base-color").addEventListener (
@@ -749,6 +837,9 @@ let private init () =
             for (id, v) in defaults do
                 (inputById id).value <- v
             ringPos <- None
+            letterAdjust.Clear ()
+            activeLetter <- None
+            renderLetterButtons ()
             // Clear placed artworks (the bank itself survives).
             for id in artOrder |> Seq.toArray do
                 arts.Remove id |> ignore
@@ -801,6 +892,7 @@ let private init () =
 
     loadBankFromStorage ()
     renderArtList ()
+    renderLetterButtons ()
 
     // Bundled default font so the app works with zero setup.
     thenDo (TextShapes.loadDefaultFont ()) (fun font ->

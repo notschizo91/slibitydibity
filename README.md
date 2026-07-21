@@ -5,6 +5,12 @@ at independent heights, keyring hole you can drag into position, and binary
 STL export — combined, or base/text/artwork as separate files for multi-color
 prints.
 
+**Letter Specific Adjustments**: some fonts scrunch particular letter pairs.
+Click a letter chip (all typed letters show as buttons), then shift that
+letter — and everything after it — left or right in mm. Adjustments cascade
+through the optical layout, are marked with a dot on the chip, and reset when
+the text changes.
+
 **SVG artwork bank**: upload SVGs (multiple at once — hearts, paws, logos …)
 into a bank of thumbnails that persists in the browser (localStorage). Click
 a bank item to place it on the keychain — as many instances as you like, each
