@@ -165,15 +165,14 @@ let private updateExportState () =
     (byId "viewer-hint")?style?display <- if has then "none" else ""
 
 /// One instance's shapes scaled to its size and moved to its position.
-/// Hole-fill threshold applies in final mm.
+/// Artwork holes are always kept — like letter counters, they render as
+/// recesses showing the base beneath.
 let private placedInst (inst: ArtInst) : Shape list =
     if inst.AShapes.IsEmpty || inst.NatH <= 0.0 then []
     else
         let s = inst.Size / inst.NatH
         inst.AShapes
         |> List.map (Geometry.mapShape (fun p -> { X = p.X * s + inst.Pos.X; Y = p.Y * s + inst.Pos.Y }))
-        |> List.map (fun sh ->
-            { sh with Holes = sh.Holes |> List.filter (fun h -> abs (Rings.signedArea h) >= holeFill) })
 
 /// Rebuild meshes from the cached text shapes + placed artworks (heights,
 /// ring, artwork placement, colors). The base blob hugs text AND artwork.
@@ -195,6 +194,17 @@ let private rebuildMeshes () =
             |> List.map (fun s -> s.Outer)
             |> Array.ofList
             |> fun outers -> Clipper.offsetUnion outers border
+        // Hole Fill Threshold applies to the BACK PLATE only: small
+        // see-through pockets that form between offset letter outlines get
+        // filled. Letter/artwork counters are untouched (they're recesses on
+        // top of the base), and the keyring hole is unioned in afterwards so
+        // it can never be filled either.
+        if holeFill > 0.0 then
+            blobCache <-
+                Clipper.toShapes blobCache
+                |> List.map (fun s ->
+                    { s with Holes = s.Holes |> List.filter (fun h -> abs (Rings.signedArea h) >= holeFill) })
+                |> Clipper.shapesToRings
         let rOuter = holeSize / 2.0 + ringThick
         ringCenterActual <-
             match ringPos with
@@ -279,7 +289,7 @@ let private rebuildText () =
                 glyphArr
                 |> Array.toList
                 |> List.mapi (fun i g ->
-                    { GShapes = TextShapes.glyphShapes glyphTol holeFill (g?commands)
+                    { GShapes = TextShapes.glyphShapes glyphTol (g?commands)
                       WordBreak = g?wordBreak
                       Adjust =
                         match letterAdjust.TryGetValue i with
@@ -817,7 +827,7 @@ let private init () =
     bindSlider "border" mm (fun v -> border <- v; scheduleText ())
     bindSlider "letter-spacing" mm (fun v -> letterSpacing <- v; scheduleText ())
     bindSlider "word-gap" (sprintf "%.1f×") (fun v -> wordGap <- v; scheduleText ())
-    bindSlider "hole-fill" (fun v -> sprintf "%.1f mm²" v) (fun v -> holeFill <- v; scheduleText ())
+    bindSlider "hole-fill" (fun v -> sprintf "%.1f mm²" v) (fun v -> holeFill <- v; scheduleMeshes ())
     bindSlider "hole-size" mm (fun v -> holeSize <- v; scheduleMeshes ())
     bindSlider "ring-thick" mm (fun v -> ringThick <- v; scheduleMeshes ())
     bindSlider "base-h" mm (fun v -> baseH <- v; scheduleMeshes ())

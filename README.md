@@ -32,7 +32,7 @@ geometry core).
   Other browsers fall back to normal downloads.
 - **Appearance** — base + text preview colors, text size (mm), border width
   (how fat the base blob is around the letters), letter spacing, word gap,
-  hole fill threshold (letter holes below the area are filled in).
+  hole fill threshold (closes small see-through pockets that form in the BASE between offset letter outlines; letter/artwork counters always stay open as recesses, and the keyring hole is never filled).
 - **Keyring Hole** — hole size + ring thickness sliders; drag the ring in the
   preview to reposition it (auto-parks at the left edge otherwise).
 - **Heights** — base height and text height (above the base) in mm.

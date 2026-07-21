@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- C-shape with a narrow mouth: once the base border offsets around it,
+       the mouth closes and the interior becomes an enclosed pocket in the
+       BASE - exactly what the hole-fill threshold should close. -->
+  <path fill="#08c" d="M 89.61 55.57 A 40 40 0 1 1 89.61 44.43 L 77.73 46.10 A 28 28 0 1 0 77.73 53.90 Z"/>
+</svg>

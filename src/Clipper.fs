@@ -38,3 +38,9 @@ let unionShapes (shapes: Shape list) : Shape list =
         |> List.collect (fun s -> orient true s.Outer :: (s.Holes |> List.map (orient false)))
         |> Array.ofList
     toShapes (unionAll rings)
+
+/// Shapes back to a clipper-ready ring soup (outers positive, holes negative).
+let shapesToRings (shapes: Shape list) : Ring array =
+    shapes
+    |> List.collect (fun s -> orient true s.Outer :: (s.Holes |> List.map (orient false)))
+    |> Array.ofList

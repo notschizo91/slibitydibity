@@ -58,13 +58,11 @@ let commandsToSubpaths (tol: float) (commands: obj array) : Subpath list =
     flush false
     List.ofSeq subs
 
-/// One glyph's commands -> fillable shapes with holes (y-down mm).
-/// Holes smaller than minHoleArea mm² are filled in (dropped).
-let glyphShapes (tol: float) (minHoleArea: float) (commands: obj array) : Shape list =
-    let shapes, _ = Rings.toShapes (commandsToSubpaths tol commands)
-    shapes
-    |> List.map (fun s ->
-        { s with Holes = s.Holes |> List.filter (fun h -> abs (Rings.signedArea h) >= minHoleArea) })
+/// One glyph's commands -> fillable shapes with holes (y-down mm). Letter
+/// counters (holes) are always kept — they render as recesses showing the
+/// base beneath.
+let glyphShapes (tol: float) (commands: obj array) : Shape list =
+    fst (Rings.toShapes (commandsToSubpaths tol commands))
 
 /// One glyph ready for optical placement. Adjust is a per-letter mm shift
 /// applied to this glyph AND everything after it (positions cascade), used

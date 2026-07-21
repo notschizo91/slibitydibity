@@ -186,12 +186,20 @@ try {
   const taller = parseStl((await download('#export-combined')).buf);
   check(Math.abs(taller.maxZ - 8) < 1e-3, `base height slider works (maxZ=${taller.maxZ})`);
 
-  // Hole fill threshold: max it out -> letter holes fill -> volume grows.
+  // Hole fill threshold must NOT touch letter counters: maxing it changes
+  // nothing on plain text (no pockets in this blob, and letter holes are
+  // recesses that always stay open).
   await page.fill('#hole-fill', '20');
   await page.dispatchEvent('#hole-fill', 'input');
   await page.waitForTimeout(350);
   const filled = parseStl((await download('#export-combined')).buf);
-  check(filled.volume > taller.volume + 10, `hole fill threshold fills letter holes (${taller.volume.toFixed(0)} -> ${filled.volume.toFixed(0)} mm³)`);
+  check(
+    Math.abs(filled.volume - taller.volume) < 1,
+    `hole fill threshold leaves letter holes alone (${taller.volume.toFixed(0)} vs ${filled.volume.toFixed(0)} mm³)`
+  );
+  await page.fill('#hole-fill', '2');
+  await page.dispatchEvent('#hole-fill', 'input');
+  await page.waitForTimeout(300);
 
   // Optical letter spacing: widening the gap slider must widen the model by
   // roughly (n-1) * delta regardless of the font's own metrics. Bury the ring
@@ -273,6 +281,33 @@ try {
   await page.waitForTimeout(200);
   check((await page.locator('#art-list li').count()) === 1, 'placed instance removed via list ×');
   check((await page.locator('.bank-item').count()) === 1, 'bank still holds the SVG');
+
+  // --- Hole Fill Threshold acts on the BASE, not the letters ---
+  // A C-shaped artwork with a narrow mouth: the border offset closes the
+  // mouth, enclosing a see-through pocket in the back plate. The threshold
+  // must fill that pocket.
+  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'horseshoe.svg'));
+  await page.waitForTimeout(400);
+  await page.click('.bank-item[data-i="1"]');
+  await page.waitForTimeout(300);
+  await page.fill('#hole-fill', '0');
+  await page.dispatchEvent('#hole-fill', 'input');
+  await page.waitForTimeout(300);
+  const pocketOpen = parseStl((await download('#export-combined')).buf);
+  await page.fill('#hole-fill', '20');
+  await page.dispatchEvent('#hole-fill', 'input');
+  await page.waitForTimeout(300);
+  const pocketFilled = parseStl((await download('#export-combined')).buf);
+  check(
+    pocketFilled.volume > pocketOpen.volume + 5,
+    `threshold fills enclosed pockets in the base (${pocketOpen.volume.toFixed(0)} -> ${pocketFilled.volume.toFixed(0)} mm³)`
+  );
+  check(pocketFilled.badEdges === 0, 'pocket-filled export watertight');
+  // Cleanup: remove the horseshoe and restore the default threshold.
+  await page.click('#art-list li:last-child .l-x');
+  await page.fill('#hole-fill', '2');
+  await page.dispatchEvent('#hole-fill', 'input');
+  await page.waitForTimeout(300);
 
   // --- Letter Specific Adjustments ---
   // Clean slate for width math: remove the last artwork and bury the ring.
