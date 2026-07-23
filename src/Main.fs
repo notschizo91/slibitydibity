@@ -87,6 +87,7 @@ type private ArtInst =
       mutable Size: float
       mutable Color: string
       mutable NoDark: bool
+      mutable Border: float
       mutable Pos: Pt }
 
 let private bank = ResizeArray<BankItem>()
@@ -195,11 +196,18 @@ let private rebuildMeshes () =
             Viewer.removeMesh viewer "base"
             Viewer.removeMesh viewer "text"
     else
-        blobCache <-
-            content
-            |> List.map (fun s -> s.Outer)
-            |> Array.ofList
-            |> fun outers -> Clipper.offsetUnion outers border
+        // The base is offset per part: text at the global Border Width, each
+        // artwork at its own border, all unioned. Lets a big artwork keep a
+        // slim rim without thinning the text border.
+        let blobParts = ResizeArray<Ring>()
+        let textOuters = glyphShapesCache |> List.map (fun s -> s.Outer) |> Array.ofList
+        if textOuters.Length > 0 then
+            blobParts.AddRange (Clipper.offsetUnion textOuters border)
+        for (id, shapes) in placed do
+            let outers = shapes |> List.map (fun s -> s.Outer) |> Array.ofList
+            if outers.Length > 0 then
+                blobParts.AddRange (Clipper.offsetUnion outers arts.[id].Border)
+        blobCache <- Clipper.unionAll (blobParts.ToArray ())
         // Hole Fill Threshold applies to the BACK PLATE only: small
         // see-through pockets that form between offset letter outlines get
         // filled. Letter/artwork counters are untouched (they're recesses on
@@ -542,6 +550,8 @@ let private syncArtEditor () =
         (byId "art-size-val").textContent <- sprintf "%.1f mm" arts.[id].Size
         (inputById "art-color").value <- arts.[id].Color
         (inputById "art-nodark").``checked`` <- arts.[id].NoDark
+        (inputById "art-border").value <- string arts.[id].Border
+        (byId "art-border-val").textContent <- sprintf "%.1f mm" arts.[id].Border
     | _ -> ()
 
 let private setActiveArt (id: int option) =
@@ -580,6 +590,7 @@ let private addFromBank (item: BankItem) =
           Size = artDefaultSize
           Color = artColors.[artColorCursor % artColors.Length]
           NoDark = false
+          Border = border
           Pos = pos }
     artColorCursor <- artColorCursor + 1
     arts.[id] <- inst
@@ -910,6 +921,12 @@ let private init () =
     bindSlider "ring-thick" mm (fun v -> ringThick <- v; scheduleMeshes ())
     bindSlider "base-h" mm (fun v -> baseH <- v; scheduleMeshes ())
     bindSlider "text-h" mm (fun v -> textH <- v; scheduleMeshes ())
+    bindSlider "art-border" mm (fun v ->
+        match activeArt with
+        | Some id when arts.ContainsKey id ->
+            arts.[id].Border <- v
+            scheduleMeshes ()
+        | _ -> ())
     bindSlider "art-size" mm (fun v ->
         match activeArt with
         | Some id when arts.ContainsKey id ->

@@ -234,6 +234,26 @@ try {
   check(withArt.volume > spaced.volume + 100, `artwork adds volume (${spaced.volume.toFixed(0)} -> ${withArt.volume.toFixed(0)} mm³)`);
   check(Math.abs(withArt.maxZ - 8) < 1e-3, `artwork does not change total height (maxZ=${withArt.maxZ})`);
 
+  // Per-artwork border: shrinking it slims the base rim around this SVG only
+  // (the artwork is the rightmost thing, so base maxX tracks its border).
+  await page.fill('#art-border', '6');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+  const rimBig = parseStl((await download('#export-combined')).buf);
+  await page.fill('#art-border', '0.5');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+  const rimSmall = parseStl((await download('#export-combined')).buf);
+  const rimDelta = rimBig.maxX - rimSmall.maxX;
+  check(
+    rimDelta > 4.8 && rimDelta < 6.2,
+    `per-artwork border controls the rim around the SVG (${rimDelta.toFixed(1)}mm for 6 -> 0.5)`
+  );
+  check(rimSmall.badEdges === 0, 'slim-rim export watertight');
+  await page.fill('#art-border', '3');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+
   // Separate export emits one artwork STL per placed instance.
   const collect = async (expected) => {
     const q = [];
