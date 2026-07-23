@@ -99,6 +99,9 @@ try {
   // The bundled font loads async; the export button enables after first build.
   await page.waitForSelector('#export-btn:not([disabled])', { timeout: 15000 });
   check(true, 'default font loaded and initial model built');
+  // Cards are collapsible; open them all so the test can reach every control.
+  await page.evaluate(() => document.querySelectorAll('details.card').forEach((d) => (d.open = true)));
+  check((await page.locator('details.card')).count && (await page.locator('details.card:not([open])').count()) === 0, 'all setting cards opened');
 
   // Type a name (two words exercises word gap + per-glyph shapes).
   await page.fill('#text-input', 'KAI JO');

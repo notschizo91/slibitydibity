@@ -24,8 +24,8 @@
       </div>
 
       <aside class="sidebar">
-        <section class="card">
-          <h2><span class="chip chip-blue">🅰</span> Font &amp; Text</h2>
+        <details class="card" open>
+          <summary><h2><span class="chip chip-blue">🅰</span> Font &amp; Text</h2></summary>
 
           <label class="field-label">Upload Font</label>
           <button type="button" class="btn btn-wide btn-accent" id="font-btn">📁 Choose Font Files</button>
@@ -39,10 +39,10 @@
           <label class="field-label" for="text-input">Keychain Text</label>
           <input type="text" id="text-input" maxlength="15" placeholder="Enter name (max 15 chars)" value="NAME" />
           <p class="hint" id="char-count">2/15 characters</p>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-yellow">❖</span> Artwork Bank (SVG)</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-yellow">❖</span> Artwork Bank (SVG)</h2></summary>
 
           <button type="button" class="btn btn-wide" id="art-btn">📁 Upload SVGs</button>
           <input type="file" id="art-file" accept=".svg,image/svg+xml" multiple hidden />
@@ -62,10 +62,10 @@
               <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
             </div>
           </div>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-pink">🎨</span> Appearance</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-pink">🎨</span> Appearance</h2></summary>
 
           <label class="field-label">Colors</label>
           <div class="color-row">
@@ -93,10 +93,10 @@
             <label for="hole-fill">Hole Fill Threshold <em class="hint-inline">(closes gaps in the base border)</em> <span class="val" id="hole-fill-val"></span></label>
             <input type="range" id="hole-fill" min="0" max="200" step="1" value="2" />
           </div>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-cyan">⇔</span> Letter Specific Adjustments</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-cyan">⇔</span> Letter Specific Adjustments</h2></summary>
           <p class="hint">Some fonts scrunch certain letter pairs. Click a letter, then shift that letter — and everything after it — left or right.</p>
           <div id="letter-btns" class="letter-grid"></div>
           <p class="hint" id="letters-empty">Type a name first.</p>
@@ -107,10 +107,10 @@
             </div>
             <button type="button" class="btn btn-small" id="letter-adjust-clear">Clear all adjustments</button>
           </div>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-red">◎</span> Keyring Hole</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-red">◎</span> Keyring Hole</h2></summary>
 
           <label class="toggle-row">
             <input type="checkbox" id="ring-enabled" checked />
@@ -129,10 +129,10 @@
             <label class="field-label">Position</label>
             <p class="hint">Drag the ring in the preview to position it</p>
           </div>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-green">⬆</span> Heights</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-green">⬆</span> Heights</h2></summary>
 
           <div class="slider-field">
             <label for="base-h">Base Height <span class="val" id="base-h-val"></span></label>
@@ -142,10 +142,10 @@
             <label for="text-h">Text Height (above base) <span class="val" id="text-h-val"></span></label>
             <input type="range" id="text-h" min="0" max="10" step="0.2" value="2" />
           </div>
-        </section>
+        </details>
 
-        <section class="card">
-          <h2><span class="chip chip-purple">⬇</span> Export</h2>
+        <details class="card">
+          <summary><h2><span class="chip chip-purple">⬇</span> Export</h2></summary>
 
           <div class="size-row"><span>Model size</span><span id="size-readout" class="mono accent2">—</span></div>
           <div class="size-row"><span>Triangles</span><span id="tri-readout" class="mono accent2">—</span></div>
@@ -154,7 +154,7 @@
           <button type="button" class="btn btn-wide" id="export-separate" disabled>⬇ Base + text as separate STLs</button>
           <p class="hint">Separate STLs let you print base, text and artwork in different colors (filament swap or multi-body slicing). Color here is preview-only — STL has no color.</p>
           <p class="hint" id="export-note"></p>
-        </section>
+        </details>
       </aside>
     </main>
 

@@ -600,3 +600,47 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 50%;
   background: var(--accent-secondary);
 }
+
+/* ---------- collapsible cards ---------- */
+
+details.card summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+
+details.card summary::-webkit-details-marker {
+  display: none;
+}
+
+details.card summary h2 {
+  margin: 0;
+  flex: 1;
+}
+
+details.card summary::after {
+  content: "▾";
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: transform 0.15s;
+  flex: none;
+}
+
+details.card:not([open]) summary::after {
+  transform: rotate(-90deg);
+}
+
+details.card[open] summary {
+  margin-bottom: 14px;
+}
+
+details.card summary:hover::after {
+  color: var(--accent-primary);
+}
+
+details.card summary + .field-label {
+  margin-top: 0;
+}
