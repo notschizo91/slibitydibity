@@ -285,6 +285,26 @@ try {
   check((await page.locator('#art-list li').count()) === 1, 'placed instance removed via list ×');
   check((await page.locator('.bank-item').count()) === 1, 'bank still holds the SVG');
 
+  // --- "Don't extrude black parts": dark fills become base cutouts ---
+  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'ball.svg'));
+  await page.waitForTimeout(400);
+  await page.click('.bank-item[data-i="1"]'); // the ball
+  await page.waitForTimeout(300);
+  const ballSolid = parseStl((await download('#export-combined')).buf);
+  await page.check('#art-nodark');
+  await page.waitForTimeout(300);
+  const ballCut = parseStl((await download('#export-combined')).buf);
+  check(
+    ballCut.volume < ballSolid.volume - 20,
+    `no-black toggle removes dark areas (${ballSolid.volume.toFixed(0)} -> ${ballCut.volume.toFixed(0)} mm³)`
+  );
+  check(ballCut.badEdges === 0, 'no-black export watertight');
+  // Cleanup: remove the ball instance and its bank entry.
+  await page.click('#art-list li:last-child .l-x');
+  await page.hover('.bank-item[data-i="1"]');
+  await page.click('.bank-item[data-i="1"] .bank-x');
+  await page.waitForTimeout(200);
+
   // --- Hole Fill Threshold acts on the BASE, not the letters ---
   // A C-shaped artwork with a narrow mouth: the border offset closes the
   // mouth, enclosing a see-through pocket in the back plate. The threshold

@@ -67,21 +67,26 @@ let mutable private folderHandle: obj = null
 
 /// One uploaded SVG in the bank: raw markup for the thumbnail/persistence
 /// plus shapes normalized to the origin (y-up, natural SVG scale).
+/// BShapes = everything; LightShapes = light-filled parts minus black parts
+/// (for the "don't extrude black" mode — black shows the base instead).
 type private BankItem =
     { Name: string
       Svg: string
       BShapes: Shape list
+      LightShapes: Shape list
       NatW: float
       NatH: float }
 
 /// One artwork placed on the keychain.
 type private ArtInst =
     { AShapes: Shape list
+      ALight: Shape list
       NatW: float
       NatH: float
       AName: string
       mutable Size: float
       mutable Color: string
+      mutable NoDark: bool
       mutable Pos: Pt }
 
 let private bank = ResizeArray<BankItem>()
@@ -168,10 +173,11 @@ let private updateExportState () =
 /// Artwork holes are always kept — like letter counters, they render as
 /// recesses showing the base beneath.
 let private placedInst (inst: ArtInst) : Shape list =
-    if inst.AShapes.IsEmpty || inst.NatH <= 0.0 then []
+    let source = if inst.NoDark then inst.ALight else inst.AShapes
+    if source.IsEmpty || inst.NatH <= 0.0 then []
     else
         let s = inst.Size / inst.NatH
-        inst.AShapes
+        source
         |> List.map (Geometry.mapShape (fun p -> { X = p.X * s + inst.Pos.X; Y = p.Y * s + inst.Pos.Y }))
 
 /// Rebuild meshes from the cached text shapes + placed artworks (heights,
@@ -401,10 +407,43 @@ let private jsonParse (s: string) : obj = jsNative
 
 let private bankStorageKey = "3dsh-svg-bank"
 
+[<Emit("getComputedStyle($0).fill")>]
+let private computedFill (el: Element) : string = jsNative
+
+[<Emit("getComputedStyle($0).stroke")>]
+let private computedStroke (el: Element) : string = jsNative
+
+/// Some dark/light for parseable colors, None for "none"/unparseable.
+let private isDarkColor (css: string) : bool option =
+    if isNull css || css = "none" then None
+    else
+        let cleaned = css.Replace("rgba(", "").Replace("rgb(", "").Replace(")", "")
+        let parts = cleaned.Split ','
+        if parts.Length >= 3 then
+            let f (s: string) = parseFloatJs (s.Trim ())
+            let r = f parts.[0]
+            let g = f parts.[1]
+            let b = f parts.[2]
+            if Double.IsNaN r || Double.IsNaN g || Double.IsNaN b then None
+            else Some ((0.299 * r + 0.587 * g + 0.114 * b) / 255.0 < 0.25)
+        else None
+
+/// Black/near-black elements count as dark (fill first, then stroke; the SVG
+/// default fill is black).
+let private elementIsDark (el: Element) : bool =
+    match isDarkColor (computedFill el) with
+    | Some d -> d
+    | None ->
+        match isDarkColor (computedStroke el) with
+        | Some d -> d
+        | None -> true
+
 /// Parse SVG markup into normalized shapes: flatten every drawable element
 /// (transforms applied, holes classified), center at the origin, flip y-down
-/// -> y-up, merge overlaps. Returns None when nothing fillable was found.
-let private parseSvgShapes (svgText: string) : (Shape list * float * float) option =
+/// -> y-up, merge overlaps. Returns (all shapes, light-minus-dark shapes,
+/// width, height); None when nothing fillable was found. Both shape sets
+/// share the same origin/scale so toggling modes doesn't move the artwork.
+let private parseSvgShapes (svgText: string) : (Shape list * Shape list * float * float) option =
     let holder = document.createElement "div"
     holder.setAttribute ("style", "position:fixed;left:-100000px;top:0;")
     holder.innerHTML <- svgText
@@ -421,25 +460,36 @@ let private parseSvgShapes (svgText: string) : (Shape list * float * float) opti
             // scaling to keychain size the chord error stays under 0.05mm.
             let bb: obj = svg?getBBox ()
             let tol = max 1e-6 ((max (bb?width: float) (bb?height: float)) / 800.0)
-            let shapes = ResizeArray<Shape>()
+            let lights = ResizeArray<Shape>()
+            let darks = ResizeArray<Shape>()
             let drawables = svg.querySelectorAll "path, rect, circle, ellipse, polygon, polyline"
             for k in 0 .. drawables.length - 1 do
                 let el = drawables.[k] :?> Element
                 if (el.closest "defs, clipPath, mask, symbol, pattern").IsNone then
                     let pe = SvgFlatten.parseElement svg tol (string k) "" el
+                    let sink = if elementIsDark el then darks else lights
                     for s in pe.Shapes do
-                        shapes.Add s
-            match Geometry.bounds shapes with
+                        sink.Add s
+            let allShapes = List.ofSeq lights @ List.ofSeq darks
+            match Geometry.bounds allShapes with
             | None -> None
             | Some (minX, minY, maxX, maxY) ->
                 let cx = (minX + maxX) / 2.0
                 let cy = (minY + maxY) / 2.0
-                let normalized =
-                    shapes
-                    |> List.ofSeq
-                    |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
-                    |> Clipper.unionShapes
-                Some (normalized, maxX - minX, maxY - minY)
+                let normalize shapes =
+                    shapes |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
+                let all = Clipper.unionShapes (normalize allShapes)
+                // "Don't extrude black": light parts minus the dark parts
+                // painted over them (paint order respected via 2D difference).
+                let lightMinusDark =
+                    let l = Clipper.unionShapes (normalize (List.ofSeq lights))
+                    if darks.Count = 0 then l
+                    elif l.IsEmpty then []
+                    else
+                        let d = Clipper.unionShapes (normalize (List.ofSeq darks))
+                        Clipper.toShapes (
+                            Clipper.combine (Clipper.shapesToRings l) (Clipper.shapesToRings d) "difference")
+                Some (all, lightMinusDark, maxX - minX, maxY - minY)
     document.body.removeChild holder |> ignore
     result
 
@@ -477,6 +527,7 @@ let private syncArtEditor () =
         (inputById "art-size").value <- string arts.[id].Size
         (byId "art-size-val").textContent <- sprintf "%.1f mm" arts.[id].Size
         (inputById "art-color").value <- arts.[id].Color
+        (inputById "art-nodark").``checked`` <- arts.[id].NoDark
     | _ -> ()
 
 let private setActiveArt (id: int option) =
@@ -508,11 +559,13 @@ let private addFromBank (item: BankItem) =
         | None -> { X = 0.0; Y = 0.0 }
     let inst =
         { AShapes = item.BShapes
+          ALight = item.LightShapes
           NatW = item.NatW
           NatH = item.NatH
           AName = item.Name
           Size = artDefaultSize
           Color = artColors.[artColorCursor % artColors.Length]
+          NoDark = false
           Pos = pos }
     artColorCursor <- artColorCursor + 1
     arts.[id] <- inst
@@ -539,8 +592,8 @@ let private addFromBank (item: BankItem) =
 let private addToBank (name: string) (svgText: string) =
     match parseSvgShapes svgText with
     | None -> window.alert (sprintf "No fillable shapes found in %s." name)
-    | Some (shapes, w, h) ->
-        bank.Add { Name = name; Svg = svgText; BShapes = shapes; NatW = w; NatH = h }
+    | Some (shapes, light, w, h) ->
+        bank.Add { Name = name; Svg = svgText; BShapes = shapes; LightShapes = light; NatW = w; NatH = h }
         renderBank ()
         saveBank ()
 
@@ -556,8 +609,8 @@ let private loadBankFromStorage () =
                 let svg: string = it?svg
                 if not (isNull (box svg)) then
                     match parseSvgShapes svg with
-                    | Some (shapes, w, h) ->
-                        bank.Add { Name = name; Svg = svg; BShapes = shapes; NatW = w; NatH = h }
+                    | Some (shapes, light, w, h) ->
+                        bank.Add { Name = name; Svg = svg; BShapes = shapes; LightShapes = light; NatW = w; NatH = h }
                     | None -> ()
             renderBank ()
 
@@ -808,6 +861,17 @@ let private init () =
                 arts.[id].Color <- (inputById "art-color").value
                 if not (isNull viewer) then Viewer.setColor viewer (sprintf "art-%d" id) arts.[id].Color
                 renderArtList ()
+            | _ -> ()
+    )
+    (inputById "art-nodark").addEventListener (
+        "change",
+        fun _ ->
+            match activeArt with
+            | Some id when arts.ContainsKey id ->
+                arts.[id].NoDark <- (inputById "art-nodark").``checked``
+                if arts.[id].NoDark && arts.[id].ALight.IsEmpty then
+                    window.alert "This SVG has no light-colored parts — nothing would be extruded."
+                scheduleMeshes ()
             | _ -> ()
     )
 
