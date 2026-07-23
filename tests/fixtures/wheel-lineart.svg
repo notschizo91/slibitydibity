@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- vectorizer-style line art: only the black network exists (a filled
+       ring + two filled bars). "Only the gaps" must extrude the 4 enclosed
+       quadrant patches. -->
+  <path fill="#000000" fill-rule="evenodd" d="M50 10 a40 40 0 1 0 0.01 0 Z M50 14 a36 36 0 1 1 -0.01 0 Z"/>
+  <rect x="48" y="12" width="4" height="76" fill="#000000"/>
+  <rect x="12" y="48" width="76" height="4" fill="#000000"/>
+</svg>

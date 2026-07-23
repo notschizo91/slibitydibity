@@ -311,7 +311,7 @@ try {
   await page.click('.bank-item[data-i="1"]'); // the ball
   await page.waitForTimeout(300);
   const ballSolid = parseStl((await download('#export-combined')).buf);
-  await page.check('#art-nodark');
+  await page.selectOption('#art-mode', '1');
   await page.waitForTimeout(300);
   const ballCut = parseStl((await download('#export-combined')).buf);
   check(
@@ -332,7 +332,7 @@ try {
   await page.click('.bank-item[data-i="1"]');
   await page.waitForTimeout(300);
   const bbSolid = parseStl((await download('#export-combined')).buf);
-  await page.check('#art-nodark');
+  await page.selectOption('#art-mode', '1');
   await page.waitForTimeout(300);
   const bbCut = parseStl((await download('#export-combined')).buf);
   check(
@@ -340,6 +340,31 @@ try {
     `all-black artwork keeps its body, cuts its details (${bbSolid.volume.toFixed(0)} -> ${bbCut.volume.toFixed(0)} mm³)`
   );
   check(bbCut.badEdges === 0, 'all-black no-black export watertight');
+  await page.selectOption('#art-mode', '0');
+  await page.waitForTimeout(200);
+  await page.click('#art-list li:last-child .l-x');
+  await page.hover('.bank-item[data-i="1"]');
+  await page.click('.bank-item[data-i="1"] .bank-x');
+  await page.waitForTimeout(200);
+
+  // --- "Only the gaps" mode: vectorized line-art extrudes its patches ---
+  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'wheel-lineart.svg'));
+  await page.waitForTimeout(400);
+  await page.click('.bank-item[data-i="1"]');
+  await page.waitForTimeout(300);
+  const laSolid = parseStl((await download('#export-combined')).buf);
+  await page.selectOption('#art-mode', '1'); // cut mode ~ solid for pure line-art
+  await page.waitForTimeout(300);
+  const laCut = parseStl((await download('#export-combined')).buf);
+  await page.selectOption('#art-mode', '2'); // gaps
+  await page.waitForTimeout(300);
+  const laGaps = parseStl((await download('#export-combined')).buf);
+  check(
+    laGaps.volume < laCut.volume - 20,
+    `gap mode extrudes only the enclosed patches (${laCut.volume.toFixed(0)} -> ${laGaps.volume.toFixed(0)} mm³)`
+  );
+  check(laGaps.volume < laSolid.volume - 20, 'gap mode smaller than solid silhouette');
+  check(laGaps.badEdges === 0, 'gap-mode export watertight');
   await page.click('#art-list li:last-child .l-x');
   await page.hover('.bank-item[data-i="1"]');
   await page.click('.bank-item[data-i="1"] .bank-x');

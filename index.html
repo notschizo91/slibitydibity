@@ -65,10 +65,13 @@
             <div class="color-row">
               <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
             </div>
-            <label class="toggle-row" style="margin-top:10px">
-              <input type="checkbox" id="art-nodark" />
-              <span>Don't extrude black parts <em class="hint-inline">(black shows the base instead — e.g. soccer balls)</em></span>
-            </label>
+            <label class="field-label">Extrude mode</label>
+            <select id="art-mode" class="select" style="margin-top:0">
+              <option value="0">Everything (solid silhouette)</option>
+              <option value="1">Cut black details out</option>
+              <option value="2">Only the gaps (line-art: black stays base)</option>
+            </select>
+            <p class="hint">"Cut black" removes dark details from a solid body. "Only the gaps" is for vectorized line-art where just a black outline network is left — the enclosed patches extrude and the black lines show the base.</p>
           </div>
         </details>
 

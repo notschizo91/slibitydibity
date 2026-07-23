@@ -74,6 +74,7 @@ type private BankItem =
       Svg: string
       BShapes: Shape list
       LightShapes: Shape list
+      GapShapes: Shape list
       NatW: float
       NatH: float }
 
@@ -81,12 +82,15 @@ type private BankItem =
 type private ArtInst =
     { AShapes: Shape list
       ALight: Shape list
+      AGaps: Shape list
       NatW: float
       NatH: float
       AName: string
       mutable Size: float
       mutable Color: string
-      mutable NoDark: bool
+      /// 0 = solid silhouette, 1 = cut black details, 2 = only the gaps
+      /// (line-art: the black network stays base).
+      mutable Mode: int
       mutable Border: float
       mutable Pos: Pt }
 
@@ -174,7 +178,11 @@ let private updateExportState () =
 /// Artwork holes are always kept — like letter counters, they render as
 /// recesses showing the base beneath.
 let private placedInst (inst: ArtInst) : Shape list =
-    let source = if inst.NoDark then inst.ALight else inst.AShapes
+    let source =
+        match inst.Mode with
+        | 1 -> inst.ALight
+        | 2 -> inst.AGaps
+        | _ -> inst.AShapes
     if source.IsEmpty || inst.NatH <= 0.0 then []
     else
         let s = inst.Size / inst.NatH
@@ -451,7 +459,7 @@ let private elementIsDark (el: Element) : bool =
 /// -> y-up, merge overlaps. Returns (all shapes, light-minus-dark shapes,
 /// width, height); None when nothing fillable was found. Both shape sets
 /// share the same origin/scale so toggling modes doesn't move the artwork.
-let private parseSvgShapes (svgText: string) : (Shape list * Shape list * float * float) option =
+let private parseSvgShapes (svgText: string) : (Shape list * Shape list * Shape list * float * float) option =
     let holder = document.createElement "div"
     holder.setAttribute ("style", "position:fixed;left:-100000px;top:0;")
     holder.innerHTML <- svgText
@@ -511,7 +519,13 @@ let private parseSvgShapes (svgText: string) : (Shape list * Shape list * float 
                         // Mostly sitting on existing material -> cut it out;
                         // otherwise it's part of the body -> add it.
                         acc <- op acc e (if overlap > 0.5 then "difference" else "union")
-                Some (all, acc, maxX - minX, maxY - minY)
+                // "Only the gaps" (vectorized line-art): fill the whole
+                // silhouette, subtract the drawing - what remains are the
+                // enclosed regions between the black lines.
+                let silhouette =
+                    Clipper.unionShapes (all |> List.map (fun s -> { s with Holes = [] }))
+                let gaps = op silhouette all "difference"
+                Some (all, acc, gaps, maxX - minX, maxY - minY)
     document.body.removeChild holder |> ignore
     result
 
@@ -549,7 +563,7 @@ let private syncArtEditor () =
         (inputById "art-size").value <- string arts.[id].Size
         (byId "art-size-val").textContent <- sprintf "%.1f mm" arts.[id].Size
         (inputById "art-color").value <- arts.[id].Color
-        (inputById "art-nodark").``checked`` <- arts.[id].NoDark
+        (inputById "art-mode").value <- string arts.[id].Mode
         (inputById "art-border").value <- string arts.[id].Border
         (byId "art-border-val").textContent <- sprintf "%.1f mm" arts.[id].Border
     | _ -> ()
@@ -584,12 +598,13 @@ let private addFromBank (item: BankItem) =
     let inst =
         { AShapes = item.BShapes
           ALight = item.LightShapes
+          AGaps = item.GapShapes
           NatW = item.NatW
           NatH = item.NatH
           AName = item.Name
           Size = artDefaultSize
           Color = artColors.[artColorCursor % artColors.Length]
-          NoDark = false
+          Mode = 0
           Border = border
           Pos = pos }
     artColorCursor <- artColorCursor + 1
@@ -617,8 +632,8 @@ let private addFromBank (item: BankItem) =
 let private addToBank (name: string) (svgText: string) =
     match parseSvgShapes svgText with
     | None -> window.alert (sprintf "No fillable shapes found in %s." name)
-    | Some (shapes, light, w, h) ->
-        bank.Add { Name = name; Svg = svgText; BShapes = shapes; LightShapes = light; NatW = w; NatH = h }
+    | Some (shapes, light, gaps, w, h) ->
+        bank.Add { Name = name; Svg = svgText; BShapes = shapes; LightShapes = light; GapShapes = gaps; NatW = w; NatH = h }
         renderBank ()
         saveBank ()
 
@@ -634,8 +649,8 @@ let private loadBankFromStorage () =
                 let svg: string = it?svg
                 if not (isNull (box svg)) then
                     match parseSvgShapes svg with
-                    | Some (shapes, light, w, h) ->
-                        bank.Add { Name = name; Svg = svg; BShapes = shapes; LightShapes = light; NatW = w; NatH = h }
+                    | Some (shapes, light, gaps, w, h) ->
+                        bank.Add { Name = name; Svg = svg; BShapes = shapes; LightShapes = light; GapShapes = gaps; NatW = w; NatH = h }
                     | None -> ()
             renderBank ()
 
@@ -888,14 +903,20 @@ let private init () =
                 renderArtList ()
             | _ -> ()
     )
-    (inputById "art-nodark").addEventListener (
+    (byId "art-mode").addEventListener (
         "change",
         fun _ ->
             match activeArt with
             | Some id when arts.ContainsKey id ->
-                arts.[id].NoDark <- (inputById "art-nodark").``checked``
-                if arts.[id].NoDark && arts.[id].ALight.IsEmpty then
-                    window.alert "This SVG has no light-colored parts — nothing would be extruded."
+                let mode = int (parseFloatJs (inputById "art-mode").value)
+                arts.[id].Mode <- mode
+                let chosen =
+                    match mode with
+                    | 1 -> arts.[id].ALight
+                    | 2 -> arts.[id].AGaps
+                    | _ -> arts.[id].AShapes
+                if chosen.IsEmpty then
+                    window.alert "That mode leaves nothing to extrude for this SVG — switching the preview off until you pick another mode."
                 scheduleMeshes ()
             | _ -> ()
     )
