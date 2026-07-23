@@ -220,41 +220,8 @@ try {
     `letter spacing controls the real outline gap (width grew ${grown.toFixed(1)}mm for +3mm x 4 gaps)`
   );
 
-  // --- SVG artwork bank: upload once, place from the bank, drag, export ---
+  // --- SVG artwork bank + surface picker ---
   // State here: base-h 6, text-h 2, letter-spacing 3, ring buried at center.
-  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'heart.svg'));
-  await page.waitForTimeout(400);
-  check((await page.locator('.bank-item').count()) === 1, 'uploaded SVG appears in the bank');
-
-  await page.click('.bank-item');
-  await page.waitForTimeout(300);
-  check((await page.locator('#art-list li').count()) === 1, 'clicking a bank item places it on the keychain');
-  const withArt = parseStl((await download('#export-combined')).buf);
-  check(withArt.badEdges === 0, 'artwork combined export watertight');
-  check(withArt.volume > spaced.volume + 100, `artwork adds volume (${spaced.volume.toFixed(0)} -> ${withArt.volume.toFixed(0)} mm³)`);
-  check(Math.abs(withArt.maxZ - 8) < 1e-3, `artwork does not change total height (maxZ=${withArt.maxZ})`);
-
-  // Per-artwork border: shrinking it slims the base rim around this SVG only
-  // (the artwork is the rightmost thing, so base maxX tracks its border).
-  await page.fill('#art-border', '6');
-  await page.dispatchEvent('#art-border', 'input');
-  await page.waitForTimeout(250);
-  const rimBig = parseStl((await download('#export-combined')).buf);
-  await page.fill('#art-border', '0.5');
-  await page.dispatchEvent('#art-border', 'input');
-  await page.waitForTimeout(250);
-  const rimSmall = parseStl((await download('#export-combined')).buf);
-  const rimDelta = rimBig.maxX - rimSmall.maxX;
-  check(
-    rimDelta > 4.8 && rimDelta < 6.2,
-    `per-artwork border controls the rim around the SVG (${rimDelta.toFixed(1)}mm for 6 -> 0.5)`
-  );
-  check(rimSmall.badEdges === 0, 'slim-rim export watertight');
-  await page.fill('#art-border', '3');
-  await page.dispatchEvent('#art-border', 'input');
-  await page.waitForTimeout(250);
-
-  // Separate export emits one artwork STL per placed instance.
   const collect = async (expected) => {
     const q = [];
     const on = (d) => q.push(d);
@@ -271,113 +238,132 @@ try {
     }
     return named;
   };
+  // Placing from the bank opens the surface picker; finish with Done.
+  const placeBank = async (i) => {
+    await page.click(`.bank-item[data-i="${i}"]`);
+    await page.waitForSelector('#svg-picker', { state: 'visible' });
+  };
+  const pickerDone = async () => {
+    await page.click('#pk-done');
+    await page.waitForSelector('#svg-picker', { state: 'hidden' });
+    await page.waitForTimeout(200);
+  };
+  const removeArt = async (bankIndex) => {
+    await page.click('#art-list li:last-child .l-x');
+    await page.hover(`.bank-item[data-i="${bankIndex}"]`);
+    await page.click(`.bank-item[data-i="${bankIndex}"] .bank-x`);
+    await page.waitForTimeout(200);
+  };
+
+  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'heart.svg'));
+  await page.waitForTimeout(400);
+  check((await page.locator('.bank-item').count()) === 1, 'uploaded SVG appears in the bank');
+
+  await placeBank(0);
+  check(await page.locator('#svg-picker').isVisible(), 'clicking a bank item opens the surface picker');
+  check((await page.locator('.pk-region').count()) >= 1, 'picker shows clickable regions');
+  await pickerDone();
+  check((await page.locator('#art-list li').count()) === 1, 'Done places the artwork on the keychain');
+  const withArt = parseStl((await download('#export-combined')).buf);
+  check(withArt.badEdges === 0, 'artwork combined export watertight');
+  check(withArt.volume > spaced.volume + 100, `artwork adds volume (${spaced.volume.toFixed(0)} -> ${withArt.volume.toFixed(0)} mm³)`);
+  check(Math.abs(withArt.maxZ - 8) < 1e-3, `artwork does not change total height (maxZ=${withArt.maxZ})`);
+
+  // Per-artwork border: shrinking it slims the base rim around this SVG only.
+  await page.fill('#art-border', '6');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+  const rimBig = parseStl((await download('#export-combined')).buf);
+  await page.fill('#art-border', '0.5');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+  const rimSmall = parseStl((await download('#export-combined')).buf);
+  const rimDelta = rimBig.maxX - rimSmall.maxX;
+  check(rimDelta > 4.8 && rimDelta < 6.2, `per-artwork border controls the rim (${rimDelta.toFixed(1)}mm for 6 -> 0.5)`);
+  check(rimSmall.badEdges === 0, 'slim-rim export watertight');
+  await page.fill('#art-border', '3');
+  await page.dispatchEvent('#art-border', 'input');
+  await page.waitForTimeout(250);
+
   const sep1 = await collect(3);
   check('KAI JO-art.stl' in sep1, `separate export includes artwork STL (${Object.keys(sep1).join(', ')})`);
   const art = parseStl(sep1['KAI JO-art.stl']);
-  check(
-    Math.abs(art.minZ - 5.8) < 1e-3 && Math.abs(art.maxZ - 8) < 1e-3,
-    `artwork spans base..base+text with 0.2mm sink (${art.minZ}..${art.maxZ})`
-  );
+  check(Math.abs(art.minZ - 5.8) < 1e-3 && Math.abs(art.maxZ - 8) < 1e-3, `artwork spans base..base+text with sink (${art.minZ}..${art.maxZ})`);
   check(art.badEdges === 0, 'artwork STL watertight (heart hole preserved)');
 
-  // Place a SECOND instance from the same bank item and drag it (the hook
-  // moves the active = newest instance): the base must grow under it.
-  await page.click('.bank-item');
-  await page.waitForTimeout(300);
+  // Second instance, dragged: the base grows under it.
+  await placeBank(0);
+  await pickerDone();
   check((await page.locator('#art-list li').count()) === 2, 'same bank item can be placed twice');
   await page.evaluate(() => window.__setArt({ x: 0, y: 60 }));
   await page.waitForTimeout(300);
   const movedArt = parseStl((await download('#export-combined')).buf);
   check(movedArt.badEdges === 0, 'two-artwork export watertight');
-  check(
-    movedArt.maxY > withArt.maxY + 20,
-    `base grows under dragged artwork (maxY ${withArt.maxY.toFixed(1)} -> ${movedArt.maxY.toFixed(1)})`
-  );
+  check(movedArt.maxY > withArt.maxY + 20, `base grows under dragged artwork (maxY ${withArt.maxY.toFixed(1)} -> ${movedArt.maxY.toFixed(1)})`);
   const sep2 = await collect(4);
-  check(
-    'KAI JO-art1.stl' in sep2 && 'KAI JO-art2.stl' in sep2,
-    `separate export names each instance (${Object.keys(sep2).join(', ')})`
-  );
+  check('KAI JO-art1.stl' in sep2 && 'KAI JO-art2.stl' in sep2, `separate export names each instance (${Object.keys(sep2).join(', ')})`);
 
-  // Removing a placed instance from the list leaves the bank untouched.
   await page.click('#art-list li:last-child .l-x');
   await page.waitForTimeout(200);
   check((await page.locator('#art-list li').count()) === 1, 'placed instance removed via list ×');
-  check((await page.locator('.bank-item').count()) === 1, 'bank still holds the SVG');
+  await page.click('#art-list li:last-child .l-x');
+  await page.waitForTimeout(200);
+  // Remove the heart from the bank too (index 0) for clean indices.
+  await page.hover('.bank-item[data-i="0"]');
+  await page.click('.bank-item[data-i="0"] .bank-x');
+  await page.waitForTimeout(200);
+  check((await page.locator('#art-list li').count()) === 0, 'keychain has no artwork');
 
-  // --- "Don't extrude black parts": dark fills become base cutouts ---
+  // --- Surface picker: click a region to toggle; Auto excludes black ---
   await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'ball.svg'));
   await page.waitForTimeout(400);
-  await page.click('.bank-item[data-i="1"]'); // the ball
-  await page.waitForTimeout(300);
-  const ballSolid = parseStl((await download('#export-combined')).buf);
-  await page.selectOption('#art-mode', '1');
-  await page.waitForTimeout(300);
-  const ballCut = parseStl((await download('#export-combined')).buf);
-  check(
-    ballCut.volume < ballSolid.volume - 20,
-    `no-black toggle removes dark areas (${ballSolid.volume.toFixed(0)} -> ${ballCut.volume.toFixed(0)} mm³)`
-  );
-  check(ballCut.badEdges === 0, 'no-black export watertight');
-  // Cleanup: remove the ball instance and its bank entry.
-  await page.click('#art-list li:last-child .l-x');
-  await page.hover('.bank-item[data-i="1"]');
-  await page.click('.bank-item[data-i="1"] .bank-x');
-  await page.waitForTimeout(200);
+  await placeBank(0);
+  const regionCount = await page.locator('.pk-region').count();
+  const selBefore = await page.locator('.pk-region.sel').count();
+  await page.click('.pk-region[data-i="1"]'); // a black detail painted on top
+  await page.waitForTimeout(100);
+  check(Math.abs((await page.locator('.pk-region.sel').count()) - selBefore) === 1, 'clicking a region toggles it in the picker');
+  await page.click('#pk-all'); // everything raised
+  await pickerDone();
+  const ballAll = parseStl((await download('#export-combined')).buf);
+  await page.click('#art-edit-surfaces');
+  await page.waitForSelector('#svg-picker', { state: 'visible' });
+  await page.click('#pk-auto'); // black excluded
+  await pickerDone();
+  const ballAuto = parseStl((await download('#export-combined')).buf);
+  check(regionCount >= 3, `ball decomposed into surfaces (${regionCount} regions)`);
+  check(ballAuto.volume < ballAll.volume - 20, `Auto leaves the black surfaces flat (${ballAll.volume.toFixed(0)} -> ${ballAuto.volume.toFixed(0)} mm³)`);
+  check(ballAuto.badEdges === 0, 'surface-picked export watertight');
+  await removeArt(0);
 
-  // ALL-BLACK artwork (no light elements at all): the body must survive and
-  // the black details painted on top must still get cut.
-  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'ball-black.svg'));
-  await page.waitForTimeout(400);
-  await page.click('.bank-item[data-i="1"]');
-  await page.waitForTimeout(300);
-  const bbSolid = parseStl((await download('#export-combined')).buf);
-  await page.selectOption('#art-mode', '1');
-  await page.waitForTimeout(300);
-  const bbCut = parseStl((await download('#export-combined')).buf);
-  check(
-    bbCut.volume < bbSolid.volume - 20 && bbCut.volume > bbSolid.volume - 300,
-    `all-black artwork keeps its body, cuts its details (${bbSolid.volume.toFixed(0)} -> ${bbCut.volume.toFixed(0)} mm³)`
-  );
-  check(bbCut.badEdges === 0, 'all-black no-black export watertight');
-  await page.selectOption('#art-mode', '0');
-  await page.waitForTimeout(200);
-  await page.click('#art-list li:last-child .l-x');
-  await page.hover('.bank-item[data-i="1"]');
-  await page.click('.bank-item[data-i="1"] .bank-x');
-  await page.waitForTimeout(200);
-
-  // --- "Only the gaps" mode: vectorized line-art extrudes its patches ---
+  // --- Cancel on a freshly-placed artwork removes it ---
   await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'wheel-lineart.svg'));
   await page.waitForTimeout(400);
-  await page.click('.bank-item[data-i="1"]');
-  await page.waitForTimeout(300);
-  const laSolid = parseStl((await download('#export-combined')).buf);
-  await page.selectOption('#art-mode', '1'); // cut mode ~ solid for pure line-art
-  await page.waitForTimeout(300);
-  const laCut = parseStl((await download('#export-combined')).buf);
-  await page.selectOption('#art-mode', '2'); // gaps
-  await page.waitForTimeout(300);
-  const laGaps = parseStl((await download('#export-combined')).buf);
-  check(
-    laGaps.volume < laCut.volume - 20,
-    `gap mode extrudes only the enclosed patches (${laCut.volume.toFixed(0)} -> ${laGaps.volume.toFixed(0)} mm³)`
-  );
-  check(laGaps.volume < laSolid.volume - 20, 'gap mode smaller than solid silhouette');
-  check(laGaps.badEdges === 0, 'gap-mode export watertight');
-  await page.click('#art-list li:last-child .l-x');
-  await page.hover('.bank-item[data-i="1"]');
-  await page.click('.bank-item[data-i="1"] .bank-x');
-  await page.waitForTimeout(200);
+  await placeBank(0);
+  await page.click('#pk-cancel');
+  await page.waitForSelector('#svg-picker', { state: 'hidden' });
+  check((await page.locator('#art-list li').count()) === 0, 'Cancel removes the just-placed artwork');
+  check((await page.locator('.bank-item').count()) === 1, 'bank keeps the SVG after Cancel');
+
+  // Line-art default = gaps only (black network stays flat, patches raised).
+  await placeBank(0);
+  await pickerDone();
+  const laDefault = parseStl((await download('#export-combined')).buf);
+  await page.click('#art-edit-surfaces');
+  await page.waitForSelector('#svg-picker', { state: 'visible' });
+  await page.click('#pk-all');
+  await pickerDone();
+  const laAll = parseStl((await download('#export-combined')).buf);
+  check(laDefault.volume < laAll.volume - 20, `line-art default raises only the gaps (${laDefault.volume.toFixed(0)} vs all ${laAll.volume.toFixed(0)} mm³)`);
+  check(laDefault.badEdges === 0, 'line-art gap export watertight');
+  await removeArt(0);
 
   // --- Hole Fill Threshold acts on the BASE, not the letters ---
-  // A C-shaped artwork with a narrow mouth: the border offset closes the
-  // mouth, enclosing a see-through pocket in the back plate. The threshold
-  // must fill that pocket.
+  // A C-shaped artwork's border offset closes its mouth, enclosing a pocket.
   await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'horseshoe.svg'));
   await page.waitForTimeout(400);
-  await page.click('.bank-item[data-i="1"]');
-  await page.waitForTimeout(300);
+  await placeBank(0);
+  await pickerDone();
   await page.fill('#hole-fill', '0');
   await page.dispatchEvent('#hole-fill', 'input');
   await page.waitForTimeout(300);
@@ -391,15 +377,13 @@ try {
     `threshold fills enclosed pockets in the base (${pocketOpen.volume.toFixed(0)} -> ${pocketFilled.volume.toFixed(0)} mm³)`
   );
   check(pocketFilled.badEdges === 0, 'pocket-filled export watertight');
-  // Cleanup: remove the horseshoe and restore the default threshold.
   await page.click('#art-list li:last-child .l-x');
   await page.fill('#hole-fill', '2');
   await page.dispatchEvent('#hole-fill', 'input');
   await page.waitForTimeout(300);
 
   // --- Letter Specific Adjustments ---
-  // Clean slate for width math: remove the last artwork and bury the ring.
-  await page.click('#art-list li:last-child .l-x');
+  // Clean slate for width math (artwork already removed above); bury the ring.
   await page.evaluate(() => window.__setRing({ x: 0, y: 0 }));
   await page.waitForTimeout(300);
   check((await page.locator('.letter-btn').count()) === 5, 'letter buttons match visible letters (KAI JO -> 5)');

@@ -21,6 +21,22 @@
         <div id="viewer-box"></div>
         <div id="viewer-hint">Loading font…</div>
         <button type="button" class="btn btn-small" id="fit-btn" title="Frame the model">⤢ fit view</button>
+
+        <div id="svg-picker">
+          <div class="picker-head">
+            <span id="picker-title" class="picker-title"></span>
+            <div class="picker-tools">
+              <button type="button" class="btn btn-small" id="pk-all">All</button>
+              <button type="button" class="btn btn-small" id="pk-none">None</button>
+              <button type="button" class="btn btn-small" id="pk-invert">Invert</button>
+              <button type="button" class="btn btn-small" id="pk-auto">Auto</button>
+              <button type="button" class="btn btn-small" id="pk-cancel">✕ Cancel</button>
+              <button type="button" class="btn btn-small btn-accent" id="pk-done">✓ Done</button>
+            </div>
+          </div>
+          <div id="picker-canvas"></div>
+          <p class="picker-hint">Click a surface to toggle it. Highlighted = raised in the artwork color; dark = stays flat as the base. Holes and gaps count as surfaces too.</p>
+        </div>
       </div>
 
       <aside class="sidebar">
@@ -65,13 +81,12 @@
             <div class="color-row">
               <label class="color-box"><input type="color" id="art-color" value="#ef4444" /><span>Artwork</span></label>
             </div>
-            <label class="field-label">Extrude mode</label>
-            <select id="art-mode" class="select" style="margin-top:0">
-              <option value="0">Everything (solid silhouette)</option>
-              <option value="1">Cut black details out</option>
-              <option value="2">Only the gaps (line-art: black stays base)</option>
-            </select>
-            <p class="hint">"Cut black" removes dark details from a solid body. "Only the gaps" is for vectorized line-art where just a black outline network is left — the enclosed patches extrude and the black lines show the base.</p>
+            <div class="slider-field">
+              <label for="art-height">Artwork Height <span class="val" id="art-height-val"></span></label>
+              <input type="range" id="art-height" min="0" max="10" step="0.2" value="2" />
+            </div>
+            <button type="button" class="btn btn-wide" id="art-edit-surfaces">✎ Edit surfaces</button>
+            <p class="hint" id="art-surfaces-info"></p>
           </div>
         </details>
 

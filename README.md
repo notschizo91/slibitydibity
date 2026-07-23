@@ -11,13 +11,18 @@ letter — and everything after it — left or right in mm. Adjustments cascade
 through the optical layout, are marked with a dot on the chip, and reset when
 the text changes.
 
-**SVG artwork bank**: upload SVGs (multiple at once — hearts, paws, logos …)
-into a bank of thumbnails that persists in the browser (localStorage). Click
-a bank item to place it on the keychain — as many instances as you like, each
-with its own size, color and draggable position. Every artwork is flattened
-with the shared engine, auto-extruded to the text height, and the base blob
-grows to hold it wherever it is parked. The separate export adds one
-`{name}-artN.stl` per placed artwork for multi-color prints.
+**SVG artwork bank + surface picker**: upload SVGs (multiple at once) into a
+bank of thumbnails that persists in the browser (localStorage). Click a bank
+thumbnail to open a **large surface picker** in the main frame: the SVG is
+decomposed into non-overlapping *surfaces* (the visible part of every drawn
+element, plus every enclosed gap between the lines), and you click the ones
+you want raised — highlighted = extruded in the artwork color, dark = stays
+flat as the base. Quick buttons (All / None / Invert / Auto) help; Auto raises
+everything except black. This replaces the old auto-modes with direct control,
+so soccer balls, line-art and logos all work by clicking. Each placed artwork
+has its own size, height, border rim, color and draggable position, and
+exports as one `{name}-artN.stl`. Re-open the picker any time via
+**Edit surfaces**.
 
 Built on the SVG-extrude engine from the companion
 [filipsaldy](https://github.com/notschizo91/filipsaldy) tool (same theme, same

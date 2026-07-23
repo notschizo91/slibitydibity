@@ -65,33 +65,35 @@ let mutable private folderHandle: obj = null
 // bank entry can be placed on the keychain any number of times. Instances
 // carry their own size, color and position.
 
-/// One uploaded SVG in the bank: raw markup for the thumbnail/persistence
-/// plus shapes normalized to the origin (y-up, natural SVG scale).
-/// BShapes = everything; LightShapes = light-filled parts minus black parts
-/// (for the "don't extrude black" mode — black shows the base instead).
+/// One uploaded SVG in the bank. The SVG is decomposed into non-overlapping
+/// *regions* (clickable surfaces) that tile its silhouette: the visible part
+/// of every drawn element, plus every enclosed gap between the drawing.
+/// RegionKinds tags each region 0=light, 1=dark(black), 2=gap. All shapes are
+/// normalized to the origin (y-up, natural SVG scale).
 type private BankItem =
     { Name: string
       Svg: string
-      BShapes: Shape list
-      LightShapes: Shape list
-      GapShapes: Shape list
+      Regions: Shape array
+      RegionKinds: int array
+      Silhouette: Shape list
       NatW: float
       NatH: float }
 
-/// One artwork placed on the keychain.
+/// One artwork placed on the keychain. Selected[i] decides whether region i is
+/// raised; unselected regions stay flat (base shows through). The full
+/// silhouette always forms the base footprint.
 type private ArtInst =
-    { AShapes: Shape list
-      ALight: Shape list
-      AGaps: Shape list
+    { ARegions: Shape array
+      ARegionKinds: int array
+      ASil: Shape list
       NatW: float
       NatH: float
       AName: string
       mutable Size: float
+      mutable Height: float
       mutable Color: string
-      /// 0 = solid silhouette, 1 = cut black details, 2 = only the gaps
-      /// (line-art: the black network stays base).
-      mutable Mode: int
       mutable Border: float
+      mutable Selected: bool array
       mutable Pos: Pt }
 
 let private bank = ResizeArray<BankItem>()
@@ -103,6 +105,11 @@ let mutable private activeArt: int option = None
 let private artDefaultSize = 15.0
 let private artColors = [| "#ef4444"; "#22d3ee"; "#eab308"; "#10b981"; "#ec4899"; "#3b82f6" |]
 let mutable private artColorCursor = 0
+// Surface-picker state: which instance is being edited, whether it was just
+// placed (so Cancel removes it), and the selection to restore on Cancel.
+let mutable private pickerId: int option = None
+let mutable private pickerWasNew = false
+let mutable private pickerSnapshot: bool array = [||]
 
 let mutable private viewer: obj = null
 
@@ -174,27 +181,32 @@ let private updateExportState () =
     (inputById "export-separate").disabled <- not has
     (byId "viewer-hint")?style?display <- if has then "none" else ""
 
-/// One instance's shapes scaled to its size and moved to its position.
-/// Artwork holes are always kept — like letter counters, they render as
-/// recesses showing the base beneath.
-let private placedInst (inst: ArtInst) : Shape list =
-    let source =
-        match inst.Mode with
-        | 1 -> inst.ALight
-        | 2 -> inst.AGaps
-        | _ -> inst.AShapes
-    if source.IsEmpty || inst.NatH <= 0.0 then []
+/// Scale a shape list to the instance's size and move it to its position.
+let private placeShapes (inst: ArtInst) (shapes: Shape list) : Shape list =
+    if inst.NatH <= 0.0 then []
     else
         let s = inst.Size / inst.NatH
-        source
+        shapes
         |> List.map (Geometry.mapShape (fun p -> { X = p.X * s + inst.Pos.X; Y = p.Y * s + inst.Pos.Y }))
+
+/// The instance's full footprint (for the base blob), placed.
+let private placedSil (inst: ArtInst) : Shape list = placeShapes inst inst.ASil
+
+/// The selected (raised) regions merged into clean solids, placed.
+let private placedRaised (inst: ArtInst) : Shape list =
+    let sel =
+        [ for i in 0 .. inst.ARegions.Length - 1 do
+            if i < inst.Selected.Length && inst.Selected.[i] then yield inst.ARegions.[i] ]
+    if sel.IsEmpty then [] else placeShapes inst (Clipper.unionShapes sel)
 
 /// Rebuild meshes from the cached text shapes + placed artworks (heights,
 /// ring, artwork placement, colors). The base blob hugs text AND artwork.
 let private rebuildMeshes () =
-    let placed = [ for id in artOrder -> id, placedInst arts.[id] ]
-    let content = glyphShapesCache @ (placed |> List.collect snd)
-    if content.IsEmpty then
+    // Per artwork: full footprint (base) and the raised (selected) surfaces.
+    let sils = [ for id in artOrder -> id, placedSil arts.[id] ]
+    let raised = [ for id in artOrder -> id, placedRaised arts.[id] ]
+    let anyBase = (not glyphShapesCache.IsEmpty) || (sils |> List.exists (fun (_, s) -> not s.IsEmpty))
+    if not anyBase then
         blobCache <- [||]
         basePositions <- [||]
         textPositions <- [||]
@@ -203,15 +215,17 @@ let private rebuildMeshes () =
         if not (isNull viewer) then
             Viewer.removeMesh viewer "base"
             Viewer.removeMesh viewer "text"
+        for id in artOrder do
+            if not (isNull viewer) then Viewer.removeMesh viewer (sprintf "art-%d" id)
     else
         // The base is offset per part: text at the global Border Width, each
-        // artwork at its own border, all unioned. Lets a big artwork keep a
-        // slim rim without thinning the text border.
+        // artwork's full footprint at its own border, all unioned. Lets a big
+        // artwork keep a slim rim without thinning the text border.
         let blobParts = ResizeArray<Ring>()
         let textOuters = glyphShapesCache |> List.map (fun s -> s.Outer) |> Array.ofList
         if textOuters.Length > 0 then
             blobParts.AddRange (Clipper.offsetUnion textOuters border)
-        for (id, shapes) in placed do
+        for (id, shapes) in sils do
             let outers = shapes |> List.map (fun s -> s.Outer) |> Array.ofList
             if outers.Length > 0 then
                 blobParts.AddRange (Clipper.offsetUnion outers arts.[id].Border)
@@ -259,22 +273,24 @@ let private rebuildMeshes () =
         // Sink the raised solids slightly into the base: exactly-coincident
         // faces (bottom == base top) make slicers produce gaps and chewed
         // edges around the outlines; a real overlap slices cleanly.
-        let extrudeRaised (shapes: Shape list) : float array =
-            if textH < 0.05 || shapes.IsEmpty then [||]
+        let extrudeRaised (shapes: Shape list) (h: float) : float array =
+            if h < 0.05 || shapes.IsEmpty then [||]
             else
                 let sink = min 0.2 (baseH / 2.0)
                 let acc = ResizeArray<float>()
                 for s in shapes do
-                    let p, _ = Geometry.extrude s (textH + sink)
+                    let p, _ = Geometry.extrude s (h + sink)
                     acc.AddRange (Geometry.translateZ (baseH - sink) p)
                 acc.ToArray()
-        textPositions <- extrudeRaised glyphShapesCache
+        textPositions <- extrudeRaised glyphShapesCache textH
         artPositions.Clear ()
         artZones.Clear ()
-        for (id, shapes) in placed do
-            artPositions.[id] <- extrudeRaised shapes
-            // Drag zone: bounding circle of the placed instance.
-            match Geometry.bounds shapes with
+        for (id, shapes) in raised do
+            artPositions.[id] <- extrudeRaised shapes arts.[id].Height
+        for (id, sil) in sils do
+            // Drag zone: bounding circle of the whole footprint, so a mostly
+            // flat artwork is still grabbable.
+            match Geometry.bounds sil with
             | Some (minX, minY, maxX, maxY) ->
                 let w = maxX - minX
                 let h = maxY - minY
@@ -285,8 +301,8 @@ let private rebuildMeshes () =
             Viewer.setMesh viewer "base" basePositions baseColor
             if textPositions.Length > 0 then Viewer.setMesh viewer "text" textPositions textColor
             else Viewer.removeMesh viewer "text"
-            for (id, _) in placed do
-                let pos = artPositions.[id]
+            for id in artOrder do
+                let pos = match artPositions.TryGetValue id with | true, p -> p | _ -> [||]
                 if pos.Length > 0 then Viewer.setMesh viewer (sprintf "art-%d" id) pos arts.[id].Color
                 else Viewer.removeMesh viewer (sprintf "art-%d" id)
     updateReadouts ()
@@ -454,12 +470,13 @@ let private elementIsDark (el: Element) : bool =
         | Some d -> d
         | None -> true
 
-/// Parse SVG markup into normalized shapes: flatten every drawable element
-/// (transforms applied, holes classified), center at the origin, flip y-down
-/// -> y-up, merge overlaps. Returns (all shapes, light-minus-dark shapes,
-/// width, height); None when nothing fillable was found. Both shape sets
-/// share the same origin/scale so toggling modes doesn't move the artwork.
-let private parseSvgShapes (svgText: string) : (Shape list * Shape list * Shape list * float * float) option =
+/// Decompose SVG markup into non-overlapping clickable regions. Every drawn
+/// element contributes its *visible* part (itself minus everything painted on
+/// top), split into connected components; every enclosed gap between the
+/// drawing is its own region too. Regions tile the silhouette, so the user can
+/// click exactly the surfaces to raise. Returns (regions, kinds, silhouette,
+/// w, h) normalized to the origin (y-up); None when nothing fillable is found.
+let private parseSvgArt (svgText: string) : (Shape array * int array * Shape list * float * float) option =
     let holder = document.createElement "div"
     holder.setAttribute ("style", "position:fixed;left:-100000px;top:0;")
     holder.innerHTML <- svgText
@@ -493,39 +510,33 @@ let private parseSvgShapes (svgText: string) : (Shape list * Shape list * Shape 
                 let cy = (minY + maxY) / 2.0
                 let normalize shapes =
                     shapes |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
-                let all = Clipper.unionShapes (normalize allShapes)
-                // "Don't extrude black": walk elements in paint order. A black
-                // element painted ON TOP of the shape built so far is a detail
-                // and gets CUT; a black element that forms the body itself
-                // (an outline ring, or an all-black icon) is kept. This works
-                // whether or not the artwork has any light-colored elements.
-                let shapesArea (shapes: Shape list) =
-                    shapes
-                    |> List.sumBy (fun s ->
-                        abs (Rings.signedArea s.Outer)
-                        - (s.Holes |> List.sumBy (fun h -> abs (Rings.signedArea h))))
                 let op (a: Shape list) (b: Shape list) (kind: string) =
                     if a.IsEmpty then (if kind = "union" then b else [])
                     elif b.IsEmpty then (if kind = "intersect" then [] else a)
                     else Clipper.toShapes (Clipper.combine (Clipper.shapesToRings a) (Clipper.shapesToRings b) kind)
-                let mutable acc: Shape list = []
-                for (isDark, shapes) in elems do
-                    let e = Clipper.unionShapes (normalize shapes)
-                    if not isDark || acc.IsEmpty then
-                        acc <- op acc e "union"
-                    else
-                        let eArea = shapesArea e
-                        let overlap = if eArea > 1e-9 then shapesArea (op acc e "intersect") / eArea else 0.0
-                        // Mostly sitting on existing material -> cut it out;
-                        // otherwise it's part of the body -> add it.
-                        acc <- op acc e (if overlap > 0.5 then "difference" else "union")
-                // "Only the gaps" (vectorized line-art): fill the whole
-                // silhouette, subtract the drawing - what remains are the
-                // enclosed regions between the black lines.
-                let silhouette =
-                    Clipper.unionShapes (all |> List.map (fun s -> { s with Holes = [] }))
-                let gaps = op silhouette all "difference"
-                Some (all, acc, gaps, maxX - minX, maxY - minY)
+                // Each element unioned + normalized, in paint order.
+                let elemU =
+                    elems |> Seq.map (fun (d, sh) -> d, Clipper.unionShapes (normalize sh)) |> List.ofSeq
+                let n = elemU.Length
+                let regions = ResizeArray<Shape>()
+                let kinds = ResizeArray<int>()
+                // Visible part of each element = element minus everything on top.
+                elemU
+                |> List.iteri (fun i (isDark, mine) ->
+                    let later = elemU |> List.skip (i + 1) |> List.collect snd
+                    let visible = if later.IsEmpty then mine else op mine (Clipper.unionShapes later) "difference"
+                    for comp in visible do
+                        regions.Add comp
+                        kinds.Add (if isDark then 1 else 0))
+                // Enclosed gaps between the drawing become their own regions.
+                let allU = Clipper.unionShapes (elemU |> List.collect snd)
+                let silFilled = Clipper.unionShapes (allU |> List.map (fun s -> { s with Holes = [] }))
+                let gaps = op silFilled allU "difference"
+                for g in gaps do
+                    regions.Add g
+                    kinds.Add 2
+                if regions.Count = 0 then None
+                else Some (regions.ToArray (), kinds.ToArray (), silFilled, maxX - minX, maxY - minY)
     document.body.removeChild holder |> ignore
     result
 
@@ -556,16 +567,21 @@ let private renderArtList () =
                 id (if activeArt = Some id then "active" else "") inst.Color inst.AName inst.Size)
         |> String.concat ""
 
-/// Point the size slider + color input at the active instance.
+/// Point the size/height/border/color inputs at the active instance.
 let private syncArtEditor () =
     match activeArt with
     | Some id when arts.ContainsKey id ->
-        (inputById "art-size").value <- string arts.[id].Size
-        (byId "art-size-val").textContent <- sprintf "%.1f mm" arts.[id].Size
-        (inputById "art-color").value <- arts.[id].Color
-        (inputById "art-mode").value <- string arts.[id].Mode
-        (inputById "art-border").value <- string arts.[id].Border
-        (byId "art-border-val").textContent <- sprintf "%.1f mm" arts.[id].Border
+        let a = arts.[id]
+        (inputById "art-size").value <- string a.Size
+        (byId "art-size-val").textContent <- sprintf "%.1f mm" a.Size
+        (inputById "art-height").value <- string a.Height
+        (byId "art-height-val").textContent <- sprintf "%.1f mm" a.Height
+        (inputById "art-color").value <- a.Color
+        (inputById "art-border").value <- string a.Border
+        (byId "art-border-val").textContent <- sprintf "%.1f mm" a.Border
+        let raisedCount = a.Selected |> Array.filter (fun b -> b) |> Array.length
+        (byId "art-surfaces-info").textContent <-
+            sprintf "%d of %d surfaces raised" raisedCount a.ARegions.Length
     | _ -> ()
 
 let private setActiveArt (id: int option) =
@@ -585,27 +601,112 @@ let private removeInstance (id: int) =
     renderArtList ()
     syncArtEditor ()
 
+// --- Surface picker: large clickable 2D preview of one artwork -------------
+
+let private svgNS = "http://www.w3.org/2000/svg"
+
+/// SVG path `d` for a region (y negated: mm y-up -> screen y-down).
+let private regionPathD (s: Shape) : string =
+    let ring (r: Ring) =
+        match r with
+        | [||] -> ""
+        | _ ->
+            "M "
+            + (r |> Array.map (fun p -> sprintf "%.3f %.3f" p.X (-p.Y)) |> String.concat " L ")
+            + " Z"
+    (s.Outer :: s.Holes) |> List.map ring |> String.concat " "
+
+let private renderPicker () =
+    match pickerId with
+    | Some id when arts.ContainsKey id ->
+        let inst = arts.[id]
+        let raised = inst.Selected |> Array.filter (fun b -> b) |> Array.length
+        (byId "picker-title").textContent <-
+            sprintf "%s — click surfaces to raise (%d of %d)" inst.AName raised inst.ARegions.Length
+        let vb =
+            match Geometry.bounds inst.ASil with
+            | Some (mnx, mny, mxx, mxy) ->
+                let pad = (max (mxx - mnx) (mxy - mny)) * 0.06 + 1.0
+                sprintf "%f %f %f %f" (mnx - pad) (-mxy - pad) (mxx - mnx + 2.0 * pad) (mxy - mny + 2.0 * pad)
+            | None -> "0 0 10 10"
+        let paths =
+            inst.ARegions
+            |> Array.mapi (fun i s ->
+                let sel = i < inst.Selected.Length && inst.Selected.[i]
+                sprintf
+                    """<path class="pk-region%s" data-i="%d" fill-rule="evenodd" d="%s"/>"""
+                    (if sel then " sel" else "") i (regionPathD s))
+            |> String.concat ""
+        (byId "picker-canvas").innerHTML <-
+            sprintf
+                """<svg viewBox="%s" preserveAspectRatio="xMidYMid meet" xmlns="%s">%s</svg>"""
+                vb svgNS paths
+    | _ -> ()
+
+let private openPicker (id: int) (isNew: bool) =
+    if arts.ContainsKey id then
+        pickerId <- Some id
+        pickerWasNew <- isNew
+        pickerSnapshot <- Array.copy arts.[id].Selected
+        (byId "svg-picker")?style?display <- "flex"
+        renderPicker ()
+
+let private closePicker () =
+    pickerId <- None
+    (byId "svg-picker")?style?display <- "none"
+
+let private donePicker () =
+    match pickerId with
+    | Some id when arts.ContainsKey id ->
+        closePicker ()
+        rebuildMeshes ()
+        renderArtList ()
+        syncArtEditor ()
+        if not (isNull viewer) then Viewer.fitView viewer
+    | _ -> closePicker ()
+
+let private cancelPicker () =
+    match pickerId with
+    | Some id ->
+        if pickerWasNew && arts.ContainsKey id then
+            closePicker ()
+            removeInstance id
+        else
+            if arts.ContainsKey id then arts.[id].Selected <- pickerSnapshot
+            closePicker ()
+            rebuildMeshes ()
+            syncArtEditor ()
+    | None -> closePicker ()
+
+/// Default selection: raise every non-black region (light + gaps). If the art
+/// is entirely black (no light/gap regions), raise all of it instead so a
+/// solid black icon still shows up.
+let private defaultSelection (kinds: int array) : bool array =
+    let sel = kinds |> Array.map (fun k -> k <> 1)
+    if Array.exists (fun b -> b) sel then sel else Array.create kinds.Length true
+
 let private addFromBank (item: BankItem) =
     artCounter <- artCounter + 1
     let id = artCounter
     // Park right of everything currently on the keychain.
-    let existing = glyphShapesCache @ (artOrder |> Seq.collect (fun i -> placedInst arts.[i]) |> List.ofSeq)
+    let existing = glyphShapesCache @ (artOrder |> Seq.collect (fun i -> placedSil arts.[i]) |> List.ofSeq)
     let halfW = (item.NatW * (artDefaultSize / max 1e-9 item.NatH)) / 2.0
     let pos =
         match Geometry.bounds existing with
         | Some (_, _, maxX, _) -> { X = maxX + border + halfW + 1.0; Y = 0.0 }
         | None -> { X = 0.0; Y = 0.0 }
     let inst =
-        { AShapes = item.BShapes
-          ALight = item.LightShapes
-          AGaps = item.GapShapes
+        { ARegions = item.Regions
+          ARegionKinds = item.RegionKinds
+          ASil = item.Silhouette
           NatW = item.NatW
           NatH = item.NatH
           AName = item.Name
           Size = artDefaultSize
+          Height = textH
           Color = artColors.[artColorCursor % artColors.Length]
-          Mode = 0
           Border = border
+          Selected = defaultSelection item.RegionKinds
           Pos = pos }
     artColorCursor <- artColorCursor + 1
     arts.[id] <- inst
@@ -627,13 +728,14 @@ let private addFromBank (item: BankItem) =
                 | _ -> ())
     setActiveArt (Some id)
     rebuildMeshes ()
-    if not (isNull viewer) then Viewer.fitView viewer
+    // Clicking a bank SVG opens the large surface picker for this new instance.
+    openPicker id true
 
 let private addToBank (name: string) (svgText: string) =
-    match parseSvgShapes svgText with
+    match parseSvgArt svgText with
     | None -> window.alert (sprintf "No fillable shapes found in %s." name)
-    | Some (shapes, light, gaps, w, h) ->
-        bank.Add { Name = name; Svg = svgText; BShapes = shapes; LightShapes = light; GapShapes = gaps; NatW = w; NatH = h }
+    | Some (regions, kinds, sil, w, h) ->
+        bank.Add { Name = name; Svg = svgText; Regions = regions; RegionKinds = kinds; Silhouette = sil; NatW = w; NatH = h }
         renderBank ()
         saveBank ()
 
@@ -648,9 +750,9 @@ let private loadBankFromStorage () =
                 let name: string = it?name
                 let svg: string = it?svg
                 if not (isNull (box svg)) then
-                    match parseSvgShapes svg with
-                    | Some (shapes, light, gaps, w, h) ->
-                        bank.Add { Name = name; Svg = svg; BShapes = shapes; LightShapes = light; GapShapes = gaps; NatW = w; NatH = h }
+                    match parseSvgArt svg with
+                    | Some (regions, kinds, sil, w, h) ->
+                        bank.Add { Name = name; Svg = svg; Regions = regions; RegionKinds = kinds; Silhouette = sil; NatW = w; NatH = h }
                     | None -> ()
             renderBank ()
 
@@ -903,23 +1005,52 @@ let private init () =
                 renderArtList ()
             | _ -> ()
     )
-    (byId "art-mode").addEventListener (
-        "change",
+    // "Edit surfaces" reopens the picker for the active artwork.
+    (byId "art-edit-surfaces").addEventListener (
+        "click",
         fun _ ->
             match activeArt with
-            | Some id when arts.ContainsKey id ->
-                let mode = int (parseFloatJs (inputById "art-mode").value)
-                arts.[id].Mode <- mode
-                let chosen =
-                    match mode with
-                    | 1 -> arts.[id].ALight
-                    | 2 -> arts.[id].AGaps
-                    | _ -> arts.[id].AShapes
-                if chosen.IsEmpty then
-                    window.alert "That mode leaves nothing to extrude for this SVG — switching the preview off until you pick another mode."
-                scheduleMeshes ()
+            | Some id when arts.ContainsKey id -> openPicker id false
             | _ -> ()
     )
+
+    // Surface picker: click a region to toggle it, quick-select buttons, done/cancel.
+    (byId "picker-canvas").addEventListener (
+        "click",
+        fun ev ->
+            match pickerId with
+            | Some id when arts.ContainsKey id ->
+                let t = ev.target :?> Element
+                match t.closest ".pk-region" with
+                | Some p ->
+                    let i = int (parseFloatJs (p.getAttribute "data-i"))
+                    if i >= 0 && i < arts.[id].Selected.Length then
+                        arts.[id].Selected.[i] <- not arts.[id].Selected.[i]
+                        renderPicker ()
+                | None -> ()
+            | _ -> ()
+    )
+    let pickerSet (f: int -> bool -> bool) =
+        match pickerId with
+        | Some id when arts.ContainsKey id ->
+            let a = arts.[id]
+            a.Selected <- Array.mapi (fun i cur -> f i cur) a.Selected
+            renderPicker ()
+        | _ -> ()
+    (byId "pk-all").addEventListener ("click", fun _ -> pickerSet (fun _ _ -> true))
+    (byId "pk-none").addEventListener ("click", fun _ -> pickerSet (fun _ _ -> false))
+    (byId "pk-invert").addEventListener ("click", fun _ -> pickerSet (fun _ cur -> not cur))
+    (byId "pk-auto").addEventListener (
+        "click",
+        fun _ ->
+            match pickerId with
+            | Some id when arts.ContainsKey id ->
+                arts.[id].Selected <- defaultSelection arts.[id].ARegionKinds
+                renderPicker ()
+            | _ -> ()
+    )
+    (byId "pk-done").addEventListener ("click", fun _ -> donePicker ())
+    (byId "pk-cancel").addEventListener ("click", fun _ -> cancelPicker ())
 
     // Keyring on/off: off = plain nameplate.
     let ringCheck = inputById "ring-enabled"
@@ -953,6 +1084,12 @@ let private init () =
         | Some id when arts.ContainsKey id ->
             arts.[id].Size <- v
             renderArtList ()
+            scheduleMeshes ()
+        | _ -> ())
+    bindSlider "art-height" mm (fun v ->
+        match activeArt with
+        | Some id when arts.ContainsKey id ->
+            arts.[id].Height <- v
             scheduleMeshes ()
         | _ -> ())
 
