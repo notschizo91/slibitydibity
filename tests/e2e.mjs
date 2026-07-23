@@ -305,6 +305,26 @@ try {
   await page.click('.bank-item[data-i="1"] .bank-x');
   await page.waitForTimeout(200);
 
+  // ALL-BLACK artwork (no light elements at all): the body must survive and
+  // the black details painted on top must still get cut.
+  await page.setInputFiles('#art-file', path.join(ROOT, 'tests', 'fixtures', 'ball-black.svg'));
+  await page.waitForTimeout(400);
+  await page.click('.bank-item[data-i="1"]');
+  await page.waitForTimeout(300);
+  const bbSolid = parseStl((await download('#export-combined')).buf);
+  await page.check('#art-nodark');
+  await page.waitForTimeout(300);
+  const bbCut = parseStl((await download('#export-combined')).buf);
+  check(
+    bbCut.volume < bbSolid.volume - 20 && bbCut.volume > bbSolid.volume - 300,
+    `all-black artwork keeps its body, cuts its details (${bbSolid.volume.toFixed(0)} -> ${bbCut.volume.toFixed(0)} mm³)`
+  );
+  check(bbCut.badEdges === 0, 'all-black no-black export watertight');
+  await page.click('#art-list li:last-child .l-x');
+  await page.hover('.bank-item[data-i="1"]');
+  await page.click('.bank-item[data-i="1"] .bank-x');
+  await page.waitForTimeout(200);
+
   // --- Hole Fill Threshold acts on the BASE, not the letters ---
   // A C-shaped artwork with a narrow mouth: the border offset closes the
   // mouth, enclosing a see-through pocket in the back plate. The threshold

@@ -460,17 +460,16 @@ let private parseSvgShapes (svgText: string) : (Shape list * Shape list * float 
             // scaling to keychain size the chord error stays under 0.05mm.
             let bb: obj = svg?getBBox ()
             let tol = max 1e-6 ((max (bb?width: float) (bb?height: float)) / 800.0)
-            let lights = ResizeArray<Shape>()
-            let darks = ResizeArray<Shape>()
+            // Per-element shapes in document (= paint) order + darkness flag.
+            let elems = ResizeArray<bool * Shape list>()
             let drawables = svg.querySelectorAll "path, rect, circle, ellipse, polygon, polyline"
             for k in 0 .. drawables.length - 1 do
                 let el = drawables.[k] :?> Element
                 if (el.closest "defs, clipPath, mask, symbol, pattern").IsNone then
                     let pe = SvgFlatten.parseElement svg tol (string k) "" el
-                    let sink = if elementIsDark el then darks else lights
-                    for s in pe.Shapes do
-                        sink.Add s
-            let allShapes = List.ofSeq lights @ List.ofSeq darks
+                    if not pe.Shapes.IsEmpty then
+                        elems.Add (elementIsDark el, pe.Shapes)
+            let allShapes = elems |> Seq.collect snd |> List.ofSeq
             match Geometry.bounds allShapes with
             | None -> None
             | Some (minX, minY, maxX, maxY) ->
@@ -479,17 +478,32 @@ let private parseSvgShapes (svgText: string) : (Shape list * Shape list * float 
                 let normalize shapes =
                     shapes |> List.map (Geometry.mapShape (fun p -> { X = p.X - cx; Y = cy - p.Y }))
                 let all = Clipper.unionShapes (normalize allShapes)
-                // "Don't extrude black": light parts minus the dark parts
-                // painted over them (paint order respected via 2D difference).
-                let lightMinusDark =
-                    let l = Clipper.unionShapes (normalize (List.ofSeq lights))
-                    if darks.Count = 0 then l
-                    elif l.IsEmpty then []
+                // "Don't extrude black": walk elements in paint order. A black
+                // element painted ON TOP of the shape built so far is a detail
+                // and gets CUT; a black element that forms the body itself
+                // (an outline ring, or an all-black icon) is kept. This works
+                // whether or not the artwork has any light-colored elements.
+                let shapesArea (shapes: Shape list) =
+                    shapes
+                    |> List.sumBy (fun s ->
+                        abs (Rings.signedArea s.Outer)
+                        - (s.Holes |> List.sumBy (fun h -> abs (Rings.signedArea h))))
+                let op (a: Shape list) (b: Shape list) (kind: string) =
+                    if a.IsEmpty then (if kind = "union" then b else [])
+                    elif b.IsEmpty then (if kind = "intersect" then [] else a)
+                    else Clipper.toShapes (Clipper.combine (Clipper.shapesToRings a) (Clipper.shapesToRings b) kind)
+                let mutable acc: Shape list = []
+                for (isDark, shapes) in elems do
+                    let e = Clipper.unionShapes (normalize shapes)
+                    if not isDark || acc.IsEmpty then
+                        acc <- op acc e "union"
                     else
-                        let d = Clipper.unionShapes (normalize (List.ofSeq darks))
-                        Clipper.toShapes (
-                            Clipper.combine (Clipper.shapesToRings l) (Clipper.shapesToRings d) "difference")
-                Some (all, lightMinusDark, maxX - minX, maxY - minY)
+                        let eArea = shapesArea e
+                        let overlap = if eArea > 1e-9 then shapesArea (op acc e "intersect") / eArea else 0.0
+                        // Mostly sitting on existing material -> cut it out;
+                        // otherwise it's part of the body -> add it.
+                        acc <- op acc e (if overlap > 0.5 then "difference" else "union")
+                Some (all, acc, maxX - minX, maxY - minY)
     document.body.removeChild holder |> ignore
     result
 

@@ -48,14 +48,18 @@ export function offsetUnion(rings, delta) {
   return fromC(clean(out));
 }
 
-/** Boolean op between two ring sets: op is "union" or "difference". */
+/** Boolean op between two ring sets: "union", "difference" or "intersect". */
 export function combine(a, b, op) {
   const c = new ClipperLib.Clipper();
   c.AddPaths(toC(a), ClipperLib.PolyType.ptSubject, true);
   c.AddPaths(toC(b), ClipperLib.PolyType.ptClip, true);
   const out = new ClipperLib.Paths();
   c.Execute(
-    op === 'union' ? ClipperLib.ClipType.ctUnion : ClipperLib.ClipType.ctDifference,
+    op === 'union'
+      ? ClipperLib.ClipType.ctUnion
+      : op === 'intersect'
+        ? ClipperLib.ClipType.ctIntersection
+        : ClipperLib.ClipType.ctDifference,
     out,
     ClipperLib.PolyFillType.pftNonZero,
     ClipperLib.PolyFillType.pftNonZero
